@@ -1,0 +1,42 @@
+plugins {
+    id 'org.springframework.boot'
+    id 'com.github.node-gradle.node' version '7.1.0'
+}
+
+dependencies {
+    implementation project(':hrGuard-common')
+    implementation project(':hrGuard-domain')
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+    implementation 'org.springframework.security:spring-security-crypto:6.1.0'
+    implementation 'io.jsonwebtoken:jjwt-api:0.12.3'
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.3'
+    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.3'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+node {
+    nodeProjectDir = file("${rootProject.projectDir}/frontend")
+    version = '20.18.0'
+    download = true
+}
+
+def frontendBuildDir = "${rootProject.projectDir}/frontend/build"
+def staticDir = "${projectDir}/src/main/resources/static"
+
+task copyFrontend(type: Copy) {
+    from frontendBuildDir
+    into staticDir
+}
+
+task buildFrontend(type: NpmTask) {
+    args = ['run', 'build']
+    dependsOn npmInstall
+}
+
+copyFrontend.dependsOn buildFrontend
+processResources.dependsOn copyFrontend

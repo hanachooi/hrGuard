@@ -1,0 +1,5 @@
+rootProject.name = 'hrGuard'
+include 'hrGuard-common'
+include 'hrGuard-domain'
+include 'hrGuard-api'
+include 'hrGuard-batch'

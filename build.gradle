@@ -1,0 +1,63 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.5.10' apply false
+    id 'io.spring.dependency-management' version '1.1.7' apply false
+}
+
+subprojects {
+    apply plugin: 'java'
+    apply plugin: 'io.spring.dependency-management'
+
+    // hrGuard-common은 다른 모듈에 의존성을 노출하는 라이브러리 역할이므로
+    // java-library 플러그인을 추가 적용하여 api 스코프를 사용할 수 있게 함
+    if (project.name == 'hrGuard-common') {
+        apply plugin: 'java-library'
+    }
+
+    group = 'com.dev'
+    version = '0.0.1-SNAPSHOT'
+
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(17)
+        }
+    }
+
+    configurations {
+        compileOnly {
+            extendsFrom annotationProcessor
+        }
+    }
+
+    repositories {
+        mavenCentral()
+    }
+
+    dependencies {
+        compileOnly 'org.projectlombok:lombok'
+        annotationProcessor 'org.projectlombok:lombok'
+    }
+
+    dependencyManagement {
+        imports {
+            mavenBom "org.springframework.boot:spring-boot-dependencies:3.5.10"
+        }
+    }
+
+    tasks.named('test') {
+        useJUnitPlatform()
+    }
+}
+
+// 루트에서 실행 가능한 태스크 위임
+tasks.register('bootRun') {
+    dependsOn ':hrGuard-api:bootRun'
+}
+
+tasks.register('bootRunBatch') {
+    dependsOn ':hrGuard-batch:bootRun'
+}
+
+tasks.register('bootJar') {
+    dependsOn ':hrGuard-api:bootJar', ':hrGuard-batch:bootJar'
+}
