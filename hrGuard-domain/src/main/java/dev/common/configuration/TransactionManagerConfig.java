@@ -64,6 +64,9 @@ public class TransactionManagerConfig {
                     "dev.commute.repository",
                     "dev.member.repository",
                     "dev.payroll.repository",
+                    "dev.holiday.repository",
+                    "dev.workrecord.repository",
+                    "dev.workschedule.repository",
                     "dev.businesstrip.repository",
                     "dev.fieldwork.repository",
                     "dev.leave.repository"
