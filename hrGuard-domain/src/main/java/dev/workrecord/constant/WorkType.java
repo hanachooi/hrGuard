@@ -1,4 +1,4 @@
-package dev.payroll.constant;
+package dev.workrecord.constant;
 
 /**
  * 근무 유형.

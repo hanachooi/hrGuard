@@ -1,4 +1,4 @@
-package dev.payroll.entity;
+package dev.holiday.entity;
 
 import dev.common.BaseEntity;
 import jakarta.persistence.*;

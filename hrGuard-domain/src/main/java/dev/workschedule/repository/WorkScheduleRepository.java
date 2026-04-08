@@ -1,6 +1,6 @@
-package dev.payroll.repository;
+package dev.workschedule.repository;
 
-import dev.payroll.entity.WorkSchedule;
+import dev.workschedule.entity.WorkSchedule;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.Optional;

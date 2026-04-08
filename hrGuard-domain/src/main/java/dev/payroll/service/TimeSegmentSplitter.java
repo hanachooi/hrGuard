@@ -1,7 +1,7 @@
 package dev.payroll.service;
 
-import dev.payroll.constant.WorkType;
-import dev.payroll.entity.WorkRecord;
+import dev.workrecord.constant.WorkType;
+import dev.workrecord.entity.WorkRecord;
 import org.springframework.stereotype.Component;
 
 import java.time.DayOfWeek;

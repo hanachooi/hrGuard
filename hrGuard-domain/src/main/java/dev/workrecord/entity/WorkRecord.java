@@ -1,7 +1,7 @@
-package dev.payroll.entity;
+package dev.workrecord.entity;
 
 import dev.common.BaseEntity;
-import dev.payroll.constant.WorkType;
+import dev.workrecord.constant.WorkType;
 import jakarta.persistence.*;
 import lombok.*;
 

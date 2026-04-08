@@ -2,8 +2,8 @@ package dev.batch.holiday;
 
 import dev.batch.holiday.client.HolidayApiClient;
 import dev.batch.holiday.client.HolidayItem;
-import dev.payroll.entity.Holiday;
-import dev.payroll.repository.HolidayRepository;
+import dev.holiday.entity.Holiday;
+import dev.holiday.repository.HolidayRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;

@@ -1,7 +1,7 @@
-package dev.payroll.repository;
+package dev.workrecord.repository;
 
-import dev.payroll.constant.WorkType;
-import dev.payroll.entity.WorkRecord;
+import dev.workrecord.constant.WorkType;
+import dev.workrecord.entity.WorkRecord;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;

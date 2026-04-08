@@ -1,6 +1,6 @@
-package dev.payroll.repository;
+package dev.holiday.repository;
 
-import dev.payroll.entity.Holiday;
+import dev.holiday.entity.Holiday;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 

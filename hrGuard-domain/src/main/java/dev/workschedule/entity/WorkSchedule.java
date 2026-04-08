@@ -1,4 +1,4 @@
-package dev.payroll.entity;
+package dev.workschedule.entity;
 
 import dev.common.BaseEntity;
 import jakarta.persistence.*;
