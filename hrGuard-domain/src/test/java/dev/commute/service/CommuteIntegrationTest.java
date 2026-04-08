@@ -56,8 +56,36 @@ class CommuteIntegrationTest {
     }
 
     @Test
+    @DisplayName("퇴근 후 재출근: 출근 → 퇴근 → 재출근 시 Commute가 2건 생성된다")
+    void 퇴근후재출근() {
+        // given
+        LocalDate today = LocalDate.now();
+        commuteService.checkIn(MEMBER_ID);
+        commuteService.checkOut(MEMBER_ID);
+
+        // when
+        commuteService.checkIn(MEMBER_ID); // 예외 없이 통과해야 한다
+
+        // then
+        List<Commute> records = commuteRepository
+                .findByMemberIdAndWorkDateOrderByInTimeAsc(MEMBER_ID, today);
+
+        assertThat(records).hasSize(2);
+
+        Commute first = records.get(0);
+        assertThat(first.getStatus()).isEqualTo(CommuteStatus.CHECKOUT);
+        assertThat(first.getInTime()).isNotNull();
+        assertThat(first.getOutTime()).isNotNull();
+
+        Commute second = records.get(1);
+        assertThat(second.getStatus()).isEqualTo(CommuteStatus.CHECKIN);
+        assertThat(second.getInTime()).isNotNull();
+        assertThat(second.getOutTime()).isNull();
+    }
+
+    @Test
     @DisplayName("중복 출근: 이미 출근 중이면 예외가 발생하고 DB에 추가 저장되지 않는다")
-    void 중복출근() {
+    void 퇴근전중복출근() {
         // given
         Commute existing = Commute.builder()
                 .memberId(MEMBER_ID)
