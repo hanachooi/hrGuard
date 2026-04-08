@@ -1,19 +1,19 @@
 package dev.batch.payroll.step;
 
 import dev.batch.common.exception.BatchException;
-import dev.batch.payroll.listener.PayrollSkipListener;
+import dev.batch.payroll.listener.*;
 import dev.common.configuration.TransactionManagerConfig;
 import dev.payroll.entity.MonthlyPayroll;
 import dev.payroll.entity.PayrollItem;
-import dev.workrecord.entity.WorkRecord;
-import dev.workschedule.entity.WorkSchedule;
 import dev.payroll.repository.MonthlyPayrollRepository;
 import dev.payroll.repository.PayrollItemRepository;
-import dev.workrecord.repository.WorkRecordRepository;
-import dev.workschedule.repository.WorkScheduleRepository;
 import dev.payroll.service.TimeSegmentSplitter;
 import dev.payroll.service.WageCalculator;
 import dev.payroll.service.WorkTimeResult;
+import dev.workrecord.entity.WorkRecord;
+import dev.workrecord.repository.WorkRecordRepository;
+import dev.workschedule.entity.WorkSchedule;
+import dev.workschedule.repository.WorkScheduleRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.ExitStatus;
@@ -65,6 +65,9 @@ public class PayrollStepConfig {
     private final WageCalculator wageCalculator;
     private final PayrollChunkListener payrollChunkListener;
     private final PayrollSkipListener payrollSkipListener;
+    private final PayrollItemReadListener payrollItemReadListener;
+    private final PayrollItemProcessListener payrollItemProcessListener;
+    private final PayrollItemWriteListener payrollItemWriteListener;
     @Qualifier(TransactionManagerConfig.DOMAIN_TRANSACTION_MANAGER)
     private final PlatformTransactionManager domainTransactionManager;
 
@@ -79,20 +82,19 @@ public class PayrollStepConfig {
                 .reader(payrollReader)
                 .processor(payrollProcessor)
                 .writer(payrollWriter)
-                .listener((Object) payrollChunkListener)   // chunk 단위 진행률 추적 + 퇴근미기록 카운터 리셋
-                .listener(payrollStepListener())  // step 시작/종료 요약
+                .listener((Object) payrollChunkListener)        // Chunk 진행률 + Step 시작/종료
+                .listener(payrollStepListener())                // Step 완료 요약
+                .listener((Object) payrollItemReadListener)     // Read 단계
+                .listener((Object) payrollItemProcessListener)  // Process 단계
+                .listener((Object) payrollItemWriteListener)    // Write 단계
                 // ── Fault-Tolerant 정책 ──────────────────────────────────
                 .faultTolerant()
-                // skip 허용 대상: BatchException (스케줄 없음 등 비즈니스 skip)
                 .skip(BatchException.class)
                 .skipLimit(SKIP_LIMIT)
-                // skip 금지 대상: Error 계열 (OOM 등 시스템 장애는 즉시 Job 중단)
                 .noSkip(Error.class)
-                // retry 대상: 일시적 DB 오류 (네트워크 순단, 락 타임아웃 등)
                 .retry(TransientDataAccessException.class)
                 .retryLimit(RETRY_LIMIT)
-                // skip 발생 시 원인 분류 로그
-                .listener(payrollSkipListener)
+                .listener(payrollSkipListener)                  // Skip 이벤트 분류
                 .build();
     }
 
