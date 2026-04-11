@@ -13,7 +13,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -87,13 +86,7 @@ class CommuteIntegrationTest {
     @DisplayName("중복 출근: 이미 출근 중이면 예외가 발생하고 DB에 추가 저장되지 않는다")
     void 퇴근전중복출근() {
         // given
-        Commute existing = Commute.builder()
-                .memberId(MEMBER_ID)
-                .workDate(LocalDate.now())
-                .status(CommuteStatus.CHECKIN)
-                .inTime(LocalDateTime.now().minusHours(1))
-                .build();
-        commuteRepository.save(existing);
+        commuteService.checkIn(MEMBER_ID);
 
         // when & then
         assertThatThrownBy(() -> commuteService.checkIn(MEMBER_ID))
