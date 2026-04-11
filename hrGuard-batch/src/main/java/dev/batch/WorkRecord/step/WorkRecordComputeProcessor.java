@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Commute 세션 → WorkRecord(OFFICE) 동기화 핵심 알고리즘.
+ * Commute 기간 → WorkRecord(OFFICE) 산출 핵심 알고리즘.
  *
  * <p>idempotency 처리(기존 OFFICE 레코드 삭제)와 슬롯 계산을 함께 담당합니다.
  * 승인 기반 레코드(FIELD, BUSINESS_TRIP, ANNUAL_LEAVE)는 workType 조건으로 보호됩니다.</p>
@@ -51,7 +51,7 @@ import java.util.stream.Collectors;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class WorkRecordSyncProcessor {
+public class WorkRecordComputeProcessor {
 
     /**
      * 입실·퇴실 오차 흡수 기준 (분). 이 이하 gap은 보정 대상.
@@ -79,16 +79,16 @@ public class WorkRecordSyncProcessor {
         workRecordRepository.deleteByMemberIdAndBizDateAndWorkType(
                 memberId, targetDate, WorkType.OFFICE);
 
-        // ── 1. 완료된 Commute 세션 수집 ─────────────────────────────────────────
-        List<Commute> sessions = commuteRepository
+        // ── 1. 완료된 Commute 기간 수집 ─────────────────────────────────────────
+        List<Commute> periods = commuteRepository
                 .findByMemberIdAndWorkDateOrderByInTimeAsc(memberId, targetDate)
                 .stream()
                 .filter(c -> c.getStatus() == CommuteStatus.CHECKOUT)
                 .filter(c -> c.getOutTime().isAfter(c.getInTime()))
                 .toList();
 
-        if (sessions.isEmpty()) {
-            log.debug("완료된 출퇴근 세션 없음 skip: memberId={}, date={}", memberId, targetDate);
+        if (periods.isEmpty()) {
+            log.debug("완료된 출퇴근 기간 없음 skip: memberId={}, date={}", memberId, targetDate);
             return List.of();
         }
 
@@ -104,12 +104,12 @@ public class WorkRecordSyncProcessor {
         // ── 3. WorkSchedule 조회 (C 보정에 사용, 없으면 clamp 생략) ──────────────
         WorkSchedule schedule = workScheduleRepository.findByMemberId(memberId).orElse(null);
 
-        // ── 4. 세션별 effectiveWindow 산출 → OFFICE 슬롯 추출 ───────────────────
+        // ── 4. 기간별 effectiveWindow 산출 → OFFICE 슬롯 추출 ───────────────────
         List<WorkRecord> result = new ArrayList<>();
-        for (Commute session : sessions) {
+        for (Commute period : periods) {
 
-            LocalDateTime effectiveStart = clampToScheduleStart(session.getInTime(), schedule, targetDate);
-            LocalDateTime effectiveEnd = clampToScheduleEnd(session.getOutTime(), schedule, targetDate);
+            LocalDateTime effectiveStart = clampToScheduleStart(period.getInTime(), schedule, targetDate);
+            LocalDateTime effectiveEnd = clampToScheduleEnd(period.getOutTime(), schedule, targetDate);
 
             effectiveStart = absorbGapBeforeSession(effectiveStart, blocked);
             effectiveEnd = absorbGapAfterSession(effectiveEnd, blocked);
@@ -119,8 +119,8 @@ public class WorkRecordSyncProcessor {
             result.addAll(buildOfficeSlots(memberId, targetDate, effectiveStart, effectiveEnd, blocked));
         }
 
-        log.debug("OFFICE 슬롯 계산 완료: memberId={}, date={}, sessions={}, slots={}",
-                memberId, targetDate, sessions.size(), result.size());
+        log.debug("OFFICE 슬롯 산출 완료: memberId={}, date={}, periods={}, slots={}",
+                memberId, targetDate, periods.size(), result.size());
         return result;
     }
 

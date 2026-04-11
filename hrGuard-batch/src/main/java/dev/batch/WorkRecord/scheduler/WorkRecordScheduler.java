@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDate;
 
 /**
- * Commute → WorkRecord(OFFICE) 동기화 일일 스케줄러.
+ * Commute → WorkRecord(OFFICE) 산출 일일 스케줄러.
  *
  * <h3>실행 시각 선택 기준</h3>
  * <ul>
@@ -27,7 +27,7 @@ import java.time.LocalDate;
  * 특정 날짜 재처리가 필요할 때는 직접 Job 파라미터로 실행한다:
  * <pre>
  *   ./gradlew :hrGuard-batch:bootRun \
- *     --args="--spring.batch.job.name=workRecordSyncJob targetDate=2026-04-01 run.id=re.1"
+ *     --args="--spring.batch.job.name=workRecordComputeJob targetDate=2026-04-01 run.id=re.1"
  * </pre>
  */
 @Slf4j
@@ -37,15 +37,15 @@ public class WorkRecordScheduler {
 
     private final JobLauncher jobLauncher;
 
-    @Qualifier("workRecordSyncJob")
-    private final Job workRecordSyncJob;
+    @Qualifier("workRecordComputeJob")
+    private final Job workRecordComputeJob;
 
     /**
-     * 매일 01:00 — 전날 Commute를 WorkRecord(OFFICE)로 동기화.
+     * 매일 01:00 — 전날 Commute를 WorkRecord(OFFICE)로 산출.
      * cron = "초 분 시 일 월 요일"
      */
     @Scheduled(cron = "0 0 1 * * *")
-    public void syncYesterday() {
+    public void computeYesterday() {
         LocalDate yesterday = LocalDate.now().minusDays(1);
         run(yesterday, "scheduled");
     }
@@ -65,8 +65,8 @@ public class WorkRecordScheduler {
                     .addString("run.id", runId, false) // non-identifying
                     .toJobParameters();
 
-            var execution = jobLauncher.run(workRecordSyncJob, params);
-            log.info("[WorkRecordSync] 실행 완료: date={}, status={}, " +
+            var execution = jobLauncher.run(workRecordComputeJob, params);
+            log.info("[WorkRecord] 실행 완료: date={}, status={}, " +
                             "읽음={}, 처리={}, 스킵={}",
                     targetDate,
                     execution.getStatus(),
@@ -78,7 +78,7 @@ public class WorkRecordScheduler {
                             .mapToLong(s -> s.getSkipCount()).sum());
 
         } catch (Exception e) {
-            log.error("[WorkRecordSync] 실행 실패: date={}, cause={}", targetDate, e.getMessage(), e);
+            log.error("[WorkRecord] 실행 실패: date={}, cause={}", targetDate, e.getMessage(), e);
         }
     }
 }

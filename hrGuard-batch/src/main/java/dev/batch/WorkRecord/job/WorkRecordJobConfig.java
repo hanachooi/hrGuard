@@ -11,17 +11,17 @@ import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 
 /**
- * Commute → WorkRecord(OFFICE) 동기화 Job.
+ * Commute → WorkRecord(OFFICE) 산출 Job.
  *
  * <h3>실행 방법</h3>
  * <pre>
  *   # 어제 데이터 처리 (스케줄러 자동 실행)
  *   ./gradlew :hrGuard-batch:bootRun \
- *     --args="--spring.batch.job.name=workRecordSyncJob targetDate=2026-04-04"
+ *     --args="--spring.batch.job.name=workRecordComputeJob targetDate=2026-04-04"
  *
  *   # 특정 날짜 재처리 (idempotent — 기존 OFFICE 레코드 삭제 후 재생성)
  *   ./gradlew :hrGuard-batch:bootRun \
- *     --args="--spring.batch.job.name=workRecordSyncJob targetDate=2026-04-01 run.id=re.1"
+ *     --args="--spring.batch.job.name=workRecordComputeJob targetDate=2026-04-01 run.id=re.1"
  * </pre>
  *
  * <h3>파라미터</h3>
@@ -37,15 +37,15 @@ public class WorkRecordJobConfig {
     private final JobRepository jobRepository;
 
     @Bean
-    public Job workRecordSyncJob(Step workRecordStep) {
-        return new JobBuilder("workRecordSyncJob", jobRepository)
-                .validator(workRecordSyncJobParametersValidator())
-                .start(workRecordStep)
+    public Job workRecordComputeJob(Step workRecordComputeStep) {
+        return new JobBuilder("workRecordComputeJob", jobRepository)
+                .validator(workRecordComputeJobParametersValidator())
+                .start(workRecordComputeStep)
                 .build();
     }
 
     @Bean
-    public JobParametersValidator workRecordSyncJobParametersValidator() {
+    public JobParametersValidator workRecordComputeJobParametersValidator() {
         return new JobParametersValidator() {
             @Override
             public void validate(JobParameters parameters) throws JobParametersInvalidException {

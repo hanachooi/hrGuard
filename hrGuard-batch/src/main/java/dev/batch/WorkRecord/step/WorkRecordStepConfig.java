@@ -26,12 +26,12 @@ import java.time.LocalDate;
 import java.util.List;
 
 /**
- * Commute → WorkRecord(OFFICE) 동기화 Step.
+ * Commute → WorkRecord(OFFICE) 산출 Step.
  *
  * <h3>처리 흐름</h3>
  * <pre>
  *   Reader   : targetDate에 퇴근 완료한 memberId 목록 (ListItemReader)
- *   Processor: WorkRecordSyncProcessor.compute() → List&lt;WorkRecord&gt;
+ *   Processor: WorkRecordComputeProcessor.compute() → List&lt;WorkRecord&gt;
  *              └ 기존 OFFICE 레코드 삭제(idempotency) + 슬롯 계산
  *   Writer   : WorkRecord 배치 저장
  * </pre>
@@ -46,7 +46,7 @@ public class WorkRecordStepConfig {
     private static final int RETRY_LIMIT = 3;
 
     private final JobRepository jobRepository;
-    private final WorkRecordSyncProcessor workRecordSyncProcessor;
+    private final WorkRecordComputeProcessor workRecordComputeProcessor;
     private final CommuteRepository commuteRepository;
     private final WorkRecordRepository workRecordRepository;
     private final WorkRecordJobExecutionListener workRecordJobExecutionListener;
@@ -59,12 +59,12 @@ public class WorkRecordStepConfig {
     private final PlatformTransactionManager domainTransactionManager;
 
     @Bean
-    public Step workRecordStep(
+    public Step workRecordComputeStep(
             ListItemReader<Long> workRecordReader,
             ItemProcessor<Long, List<WorkRecord>> workRecordProcessor,
             ItemWriter<List<WorkRecord>> workRecordWriter
     ) {
-        return new StepBuilder("workRecordStep", jobRepository)
+        return new StepBuilder("workRecordComputeStep", jobRepository)
                 .<Long, List<WorkRecord>>chunk(CHUNK_SIZE, domainTransactionManager)
                 .reader(workRecordReader)
                 .processor(workRecordProcessor)
@@ -99,7 +99,7 @@ public class WorkRecordStepConfig {
 
     /**
      * memberId → List&lt;WorkRecord&gt; 변환.
-     * idempotency 처리와 슬롯 계산은 WorkRecordSyncProcessor가 담당한다.
+     * idempotency 처리와 슬롯 산출은 WorkRecordComputeProcessor가 담당한다.
      */
     @Bean
     @StepScope
@@ -108,7 +108,7 @@ public class WorkRecordStepConfig {
     ) {
         return memberId -> {
             LocalDate date = LocalDate.parse(targetDate);
-            List<WorkRecord> slots = workRecordSyncProcessor.compute(memberId, date);
+            List<WorkRecord> slots = workRecordComputeProcessor.compute(memberId, date);
             if (slots.isEmpty()) {
                 log.debug("[WorkRecord] 생성 슬롯 없음 skip: memberId={}", memberId);
                 return null;

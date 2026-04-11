@@ -9,7 +9,7 @@ import org.springframework.batch.core.scope.context.ChunkContext;
 import org.springframework.stereotype.Component;
 
 /**
- * WorkRecordSync Chunk 단위 진행률 리스너.
+ * WorkRecord Chunk 단위 진행률 리스너.
  *
  * <p>청크 커밋/롤백마다 진행 상황을 로그로 남기고 Micrometer 카운터를 증가시킵니다.</p>
  *
@@ -50,7 +50,7 @@ public class WorkRecordChunkListener implements ChunkListener {
     @Override
     public void beforeChunk(ChunkContext context) {
         StepExecution se = context.getStepContext().getStepExecution();
-        log.debug("[WorkRecordSync Chunk 시작] 커밋={}, 읽기={}, 쓰기={}, 필터={}",
+        log.debug("[WorkRecord Chunk 시작] 커밋={}, 읽기={}, 쓰기={}, 필터={}",
                 se.getCommitCount(), se.getReadCount(), se.getWriteCount(), se.getFilterCount());
     }
 
@@ -75,7 +75,7 @@ public class WorkRecordChunkListener implements ChunkListener {
         se.getExecutionContext().putLong("wr.prevWritten", se.getWriteCount());
         se.getExecutionContext().putLong("wr.prevFiltered", se.getFilterCount());
 
-        log.info("[WorkRecordSync Chunk #{} 완료] 읽기={} | 저장={} | skip={} | 롤백={}",
+        log.info("[WorkRecord Chunk #{} 완료] 읽기={} | 저장={} | skip={} | 롤백={}",
                 se.getCommitCount(),
                 se.getReadCount(), se.getWriteCount(),
                 se.getFilterCount(), se.getRollbackCount());
@@ -86,7 +86,7 @@ public class WorkRecordChunkListener implements ChunkListener {
         StepExecution se = context.getStepContext().getStepExecution();
         Throwable error = (Throwable) context.getAttribute(ChunkListener.ROLLBACK_EXCEPTION_KEY);
         chunkErrorCounter.increment();
-        log.error("[WorkRecordSync Chunk 롤백] 읽기={} | 누적롤백={} | 원인={}",
+        log.error("[WorkRecord Chunk 롤백] 읽기={} | 누적롤백={} | 원인={}",
                 se.getReadCount(), se.getRollbackCount(),
                 error != null ? error.getMessage() : "unknown");
     }
