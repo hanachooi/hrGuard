@@ -1,6 +1,8 @@
 package dev.workschedule.entity;
 
 import dev.common.BaseEntity;
+import dev.workschedule.exception.WorkScheduleError;
+import dev.workschedule.exception.WorkScheduleException;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -84,6 +86,35 @@ public class WorkSchedule extends BaseEntity {
     @Column(name = "hourly_wage", nullable = false)
     private int hourlyWage;
 
+    public static WorkSchedule create(Long memberId, String workDays, LocalTime startTime,
+                                      LocalTime endTime, double dailyWorkHours, int hourlyWage) {
+        validate(workDays, startTime, endTime, dailyWorkHours, hourlyWage);
+        return WorkSchedule.builder()
+                .memberId(memberId)
+                .workDays(workDays)
+                .startTime(startTime)
+                .endTime(endTime)
+                .dailyWorkHours(dailyWorkHours)
+                .hourlyWage(hourlyWage)
+                .build();
+    }
+
+    private static void validate(String workDays, LocalTime startTime, LocalTime endTime,
+                                 double dailyWorkHours, int hourlyWage) {
+        if (workDays == null || workDays.isBlank()) {
+            throw new WorkScheduleException(WorkScheduleError.INVALID_WORK_DAYS);
+        }
+        if (!endTime.isAfter(startTime)) {
+            throw new WorkScheduleException(WorkScheduleError.INVALID_TIME_RANGE);
+        }
+        if (dailyWorkHours <= 0) {
+            throw new WorkScheduleException(WorkScheduleError.INVALID_DAILY_WORK_HOURS);
+        }
+        if (hourlyWage <= 0) {
+            throw new WorkScheduleException(WorkScheduleError.INVALID_HOURLY_WAGE);
+        }
+    }
+
     /**
      * workDays 문자열 → {@link DayOfWeek} Set 변환.
      * TimeSegmentSplitter 에서 소정 근무일 여부 판단에 사용.
@@ -94,5 +125,15 @@ public class WorkSchedule extends BaseEntity {
                 .filter(s -> !s.isEmpty())
                 .map(DayOfWeek::valueOf)
                 .collect(Collectors.toSet());
+    }
+
+    public void update(String workDays, LocalTime startTime, LocalTime endTime,
+                       double dailyWorkHours, int hourlyWage) {
+        validate(workDays, startTime, endTime, dailyWorkHours, hourlyWage);
+        this.workDays = workDays;
+        this.startTime = startTime;
+        this.endTime = endTime;
+        this.dailyWorkHours = dailyWorkHours;
+        this.hourlyWage = hourlyWage;
     }
 }

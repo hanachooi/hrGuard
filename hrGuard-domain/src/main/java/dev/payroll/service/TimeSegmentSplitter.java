@@ -1,7 +1,7 @@
 package dev.payroll.service;
 
 import dev.workrecord.constant.WorkType;
-import dev.workrecord.entity.WorkRecord;
+import dev.workrecord.entity.WorkSlot;
 import org.springframework.stereotype.Component;
 
 import java.time.DayOfWeek;
@@ -58,53 +58,46 @@ public class TimeSegmentSplitter {
     }
 
     /**
-     * 하루에 여러 근무 세그먼트(외근·출장 등)가 있을 때 일별 합산 후 계산합니다.
+     * 하루에 여러 근무 슬롯(외근·출장 등)이 있을 때 일별 합산 후 계산합니다.
      *
-     * <p>기존 {@code split()}은 단일 출퇴근 1건을 처리하지만,
-     * 이 메서드는 같은 {@code workDate}의 여러 {@link WorkRecord}를 받아
-     * 연장·야간·휴일 수당을 정확히 계산합니다.</p>
+     * <p>{@link WorkSlot}은 WorkRecord 하루 마스터에 속한 개별 시간 세그먼트입니다.
+     * 야간·연장·휴일 수당을 슬롯 목록 전체를 합산하여 정확히 계산합니다.</p>
      *
      * <h3>핵심 원칙</h3>
      * <ul>
-     *   <li>야간 시간: 세그먼트별 독립 계산 후 합산 (시간대 기반이므로 분리 필요)</li>
+     *   <li>야간 시간: 슬롯별 독립 계산 후 합산 (시간대 기반이므로 분리 필요)</li>
      *   <li>연장 시간: 하루 총 근무시간 합산 후 {@code dailyWorkHours} 초과분으로 판단</li>
-     *   <li>휴일 판단: {@code workDate} 요일 기준 (세그먼트 중 첫 번째가 아닌 날짜 자체)</li>
-     *   <li>endTime == null 세그먼트: 퇴근 미기록으로 계산에서 제외</li>
+     *   <li>휴일 판단: {@code bizDate} 요일 기준</li>
      * </ul>
      *
      * @param bizDate           근무 날짜 (장부 기준)
-     * @param segments          해당 날짜의 근무 기록 목록 (하루 1건~N건)
+     * @param slots             해당 날짜의 WorkSlot 목록 (하루 1건~N건)
      * @param scheduledWorkDays 소정 근무 요일 Set
      * @param dailyWorkHours    일 소정 근로시간
      */
     public WorkTimeResult splitDaily(
             LocalDate bizDate,
-            List<WorkRecord> segments,
+            List<WorkSlot> slots,
             Set<DayOfWeek> scheduledWorkDays,
             double dailyWorkHours
     ) {
-        // ── endTime 없는 세그먼트 제외 ────────────────────────────────────
-        List<WorkRecord> validSegments = segments.stream()
-                .filter(s -> s.getEndTime() != null)
-                .toList();
-
-        if (validSegments.isEmpty()) {
+        if (slots.isEmpty()) {
             return new WorkTimeResult(0, 0, 0, 0, 0);
         }
 
-        // ── 야간 시간: 세그먼트별 계산 후 합산 ───────────────────────────
-        double totalNightHours = validSegments.stream()
+        // ── 야간 시간: 슬롯별 계산 후 합산 ───────────────────────────────
+        double totalNightHours = slots.stream()
                 .mapToDouble(s -> calculateNightHours(s.getStartTime(), s.getEndTime()))
                 .sum();
 
-        // ── 총 근무 시간: 세그먼트별 합산 후 일별 휴게시간 차감 ──────────
+        // ── 총 근무 시간: 슬롯별 합산 후 일별 휴게시간 차감 ──────────────
         // ANNUAL_LEAVE 유형: 휴가 승인일수만큼 그대로 지급 (법정 휴게시간 불필요)
         // 일반 근무 유형: 일 합산 기준으로 휴게시간 1회 차감
-        double leaveHours = validSegments.stream()
+        double leaveHours = slots.stream()
                 .filter(s -> s.getWorkType() == WorkType.ANNUAL_LEAVE)
                 .mapToDouble(s -> Duration.between(s.getStartTime(), s.getEndTime()).toMinutes() / 60.0)
                 .sum();
-        double rawWorkHours = validSegments.stream()
+        double rawWorkHours = slots.stream()
                 .filter(s -> s.getWorkType() != WorkType.ANNUAL_LEAVE)
                 .mapToDouble(s -> Duration.between(s.getStartTime(), s.getEndTime()).toMinutes() / 60.0)
                 .sum();

@@ -6,8 +6,9 @@ import dev.fieldwork.exception.FieldWorkError;
 import dev.fieldwork.exception.FieldWorkException;
 import dev.fieldwork.repository.FieldWorkRepository;
 import dev.workrecord.constant.WorkType;
-import dev.workrecord.entity.WorkRecord;
-import dev.workrecord.repository.WorkRecordRepository;
+import dev.workrecord.service.WorkRecordService;
+import dev.workschedule.entity.WorkSchedule;
+import dev.workschedule.service.WorkScheduleService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,39 +22,36 @@ import java.util.List;
 public class FieldWorkService {
 
     private final FieldWorkRepository fieldWorkRepository;
-    private final WorkRecordRepository workRecordRepository;
+    private final WorkRecordService workRecordService;
+    private final WorkScheduleService workScheduleService;
 
     // ── 신청 ─────────────────────────────────────────────────────────────────
 
     @Transactional
-    public FieldWork apply(Long memberId, LocalDate workDate,
-                           LocalDateTime startTime, LocalDateTime endTime,
+    public FieldWork apply(Long memberId,
+                           LocalDateTime startDateTime, LocalDateTime endDateTime,
                            String location, String purpose) {
-        FieldWork fieldWork = FieldWork.apply(memberId, workDate, startTime, endTime, location, purpose);
-        return fieldWorkRepository.save(fieldWork);
+        return fieldWorkRepository.save(
+                FieldWork.apply(memberId, startDateTime, endDateTime, location, purpose));
     }
 
     // ── 승인 ─────────────────────────────────────────────────────────────────
 
     /**
-     * 외근을 승인하고 해당 날짜/시간에 대해 WorkRecord(FIELD)를 생성합니다.
+     * 외근을 승인하고 구간을 날짜별 WorkRecord 슬롯으로 분할하여 저장합니다.
      *
-     * <p>같은 날 이미 OFFICE WorkRecord가 있어도 별도 세그먼트로 추가됩니다.
-     * 배치 Processor가 일별 합산 후 연장·야간 수당을 정확히 계산합니다.</p>
+     * <p>슬롯 시간은 멤버의 WorkSchedule 기준이며, 없으면 기본값(09:00~18:00)을 사용합니다.</p>
      */
     @Transactional
     public void approve(Long fieldWorkId) {
         FieldWork fieldWork = findById(fieldWorkId);
         fieldWork.approve();
 
-        WorkRecord record = WorkRecord.builder()
-                .memberId(fieldWork.getMemberId())
-                .bizDate(fieldWork.getWorkDate())
-                .startTime(fieldWork.getStartTime())
-                .endTime(fieldWork.getEndTime())
-                .workType(WorkType.FIELD)
-                .build();
-        workRecordRepository.save(record);
+        WorkSchedule schedule = workScheduleService.findByMemberId(fieldWork.getMemberId());
+        workRecordService.registerApprovedSlots(
+                fieldWork.getMemberId(),
+                fieldWork.getStartDateTime(), fieldWork.getEndDateTime(),
+                schedule, WorkType.FIELD);
     }
 
     // ── 반려 ─────────────────────────────────────────────────────────────────
@@ -61,6 +59,19 @@ public class FieldWorkService {
     @Transactional
     public void reject(Long fieldWorkId, String reason) {
         findById(fieldWorkId).reject(reason);
+    }
+
+    // ── 취소 (승인 후 취소) ───────────────────────────────────────────────────
+
+    @Transactional
+    public void cancel(Long fieldWorkId) {
+        FieldWork fieldWork = findById(fieldWorkId);
+        LocalDate date = fieldWork.getStartDateTime().toLocalDate();
+        LocalDate endDate = fieldWork.getEndDateTime().toLocalDate();
+        while (!date.isAfter(endDate)) {
+            workRecordService.removeApprovedSlots(fieldWork.getMemberId(), date, WorkType.FIELD);
+            date = date.plusDays(1);
+        }
     }
 
     // ── 조회 ─────────────────────────────────────────────────────────────────
@@ -72,8 +83,7 @@ public class FieldWorkService {
 
     @Transactional(readOnly = true)
     public List<FieldWork> findPending() {
-        return fieldWorkRepository.findByStatusOrderByCreatedAtDesc(
-                FieldWorkStatus.PENDING);
+        return fieldWorkRepository.findByStatusOrderByCreatedAtDesc(FieldWorkStatus.PENDING);
     }
 
     // ── 내부 ─────────────────────────────────────────────────────────────────
@@ -82,4 +92,5 @@ public class FieldWorkService {
         return fieldWorkRepository.findById(id)
                 .orElseThrow(() -> new FieldWorkException(FieldWorkError.FIELD_WORK_NOT_FOUND));
     }
+
 }
