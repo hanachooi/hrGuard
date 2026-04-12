@@ -8,17 +8,14 @@ import dev.leave.exception.LeaveException;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 
 /**
  * 휴가 신청 엔티티.
  *
- * <p>승인(APPROVED) 시 신청 구간을 날짜별 WorkRecord 슬롯으로 분할하여
- * {@link dev.workrecord.entity.WorkRecord}(ANNUAL_LEAVE 유형)가 자동 생성됩니다.</p>
- *
- * <h3>반차 신청 제약</h3>
- * HALF_AM / HALF_PM은 단일 날짜만 허용 (startDateTime.date == endDateTime.date).
+ * <p>출장과 동일하게 startDateTime~endDateTime 시간 범위로 관리합니다.
+ * 반차·반반차는 유형 구분 없이 시간 범위로 표현됩니다.</p>
  */
 @Entity
 @Getter
@@ -65,10 +62,6 @@ public class Leave extends BaseEntity {
         if (!endDateTime.isAfter(startDateTime)) {
             throw new LeaveException(LeaveError.INVALID_DATE_RANGE);
         }
-        if ((leaveType == LeaveType.HALF_AM || leaveType == LeaveType.HALF_PM)
-                && !startDateTime.toLocalDate().equals(endDateTime.toLocalDate())) {
-            throw new LeaveException(LeaveError.HALF_DAY_MUST_BE_SINGLE_DATE);
-        }
         return Leave.builder()
                 .memberId(memberId)
                 .startDateTime(startDateTime)
@@ -96,12 +89,12 @@ public class Leave extends BaseEntity {
     }
 
     /**
-     * 연차 잔여일수 차감 일수.
-     * HALF_AM / HALF_PM = 0.5일, 그 외 = 신청 기간 내 일수 × 1.0.
+     * 연차 잔여일수 차감량 — 8시간 = 1일 기준.
+     * 예) 4시간(반차) → 0.5일, 2시간(반반차) → 0.25일
      */
     public double getDeductionDays() {
         if (!leaveType.deductsBalance()) return 0.0;
-        long days = ChronoUnit.DAYS.between(startDateTime.toLocalDate(), endDateTime.toLocalDate()) + 1;
-        return days * leaveType.daysPerUnit();
+        long minutes = Duration.between(startDateTime, endDateTime).toMinutes();
+        return minutes / (8.0 * 60.0);
     }
 }

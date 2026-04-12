@@ -18,34 +18,43 @@ public interface LeaveRepository extends JpaRepository<Leave, Long> {
     List<Leave> findByStatusOrderByStartDateTimeDesc(LeaveStatus status);
 
     /**
-     * 해당 기간과 겹치는 승인된 휴가 목록을 반환합니다.
-     * 배치 Processor에서 "퇴근 미기록" 여부를 판단할 때 사용합니다.
+     * 특정 날짜를 포함하는 승인된 휴가 목록 — 배치 Processor용.
      */
     @Query("""
-            SELECT a FROM Leave a
-            WHERE a.memberId = :memberId
-              AND a.status = 'APPROVED'
-              AND a.startDateTime < :endDateTime
-              AND a.endDateTime   > :startDateTime
+            SELECT l FROM Leave l
+            WHERE l.memberId = :memberId
+              AND l.status = 'APPROVED'
+              AND l.startDateTime < :nextDay
+              AND l.endDateTime >= :startOfDay
             """)
-    List<Leave> findApprovedByMemberIdAndDateRange(
+    List<Leave> findApprovedByMemberIdAndDate(
             @Param("memberId") Long memberId,
-            @Param("startDateTime") LocalDateTime startDateTime,
-            @Param("endDateTime") LocalDateTime endDateTime
-    );
+            @Param("startOfDay") LocalDateTime startOfDay,
+            @Param("nextDay") LocalDateTime nextDay);
 
     /**
-     * 특정 기간에 승인된 휴가가 있는 memberId 목록.
-     * 배치 Reader 보조 쿼리로 사용 가능합니다.
+     * 특정 날짜에 승인된 휴가가 있는 memberId 목록 — 배치 Reader용.
      */
     @Query("""
-            SELECT DISTINCT a.memberId FROM Leave a
-            WHERE a.status = 'APPROVED'
-              AND a.startDateTime < :endDateTime
-              AND a.endDateTime   > :startDateTime
+            SELECT DISTINCT l.memberId FROM Leave l
+            WHERE l.status = 'APPROVED'
+              AND l.startDateTime < :nextDay
+              AND l.endDateTime >= :startOfDay
+            """)
+    List<Long> findApprovedMemberIdsByDate(
+            @Param("startOfDay") LocalDateTime startOfDay,
+            @Param("nextDay") LocalDateTime nextDay);
+
+    /**
+     * 특정 기간에 승인된 휴가가 있는 memberId 목록 — (기존, 배치 보조 쿼리).
+     */
+    @Query("""
+            SELECT DISTINCT l.memberId FROM Leave l
+            WHERE l.status = 'APPROVED'
+              AND l.startDateTime < :endDateTime
+              AND l.endDateTime >= :startDateTime
             """)
     List<Long> findDistinctMemberIdsByApprovedLeaveInRange(
             @Param("startDateTime") LocalDateTime startDateTime,
-            @Param("endDateTime") LocalDateTime endDateTime
-    );
+            @Param("endDateTime") LocalDateTime endDateTime);
 }

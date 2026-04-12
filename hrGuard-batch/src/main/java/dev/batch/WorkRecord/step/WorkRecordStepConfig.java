@@ -2,8 +2,11 @@ package dev.batch.WorkRecord.step;
 
 import dev.batch.WorkRecord.listener.*;
 import dev.batch.common.exception.BatchException;
+import dev.businesstrip.repository.BusinessTripRepository;
 import dev.common.configuration.TransactionManagerConfig;
 import dev.commute.repository.CommuteRepository;
+import dev.fieldwork.repository.FieldWorkRepository;
+import dev.leave.repository.LeaveRepository;
 import dev.workrecord.entity.WorkRecord;
 import dev.workrecord.repository.WorkRecordRepository;
 import lombok.RequiredArgsConstructor;
@@ -23,17 +26,20 @@ import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.time.LocalDate;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
- * Commute → WorkRecord(OFFICE) 산출 Step.
+ * Commute + Leave + BusinessTrip + FieldWork → WorkRecord(일별 집계) 산출 Step.
  *
  * <h3>처리 흐름</h3>
  * <pre>
- *   Reader   : targetDate에 퇴근 완료한 memberId 목록 (ListItemReader)
- *   Processor: WorkRecordComputeProcessor.compute() → List&lt;WorkRecord&gt;
- *              └ 기존 OFFICE 레코드 삭제(idempotency) + 슬롯 계산
- *   Writer   : WorkRecord 배치 저장
+ *   Reader   : targetDate에 활동이 있는 memberId 목록
+ *              (완료된 출퇴근 OR 승인된 휴가/출장/외근)
+ *   Processor: WorkRecordComputeProcessor.compute() → WorkRecord 집계 1건
+ *              └ 기존 레코드 삭제(idempotency) + 원천별 시간 + 정산용 시간 산출
+ *   Writer   : WorkRecord 저장
  * </pre>
  */
 @Slf4j
@@ -42,12 +48,15 @@ import java.util.List;
 public class WorkRecordStepConfig {
 
     private static final int CHUNK_SIZE = 100;
-    private static final int SKIP_LIMIT = 50;
+    private static final int SKIP_LIMIT = 3;
     private static final int RETRY_LIMIT = 3;
 
     private final JobRepository jobRepository;
     private final WorkRecordComputeProcessor workRecordComputeProcessor;
     private final CommuteRepository commuteRepository;
+    private final LeaveRepository leaveRepository;
+    private final BusinessTripRepository businessTripRepository;
+    private final FieldWorkRepository fieldWorkRepository;
     private final WorkRecordRepository workRecordRepository;
     private final WorkRecordJobExecutionListener workRecordJobExecutionListener;
     private final WorkRecordChunkListener workRecordChunkListener;
@@ -61,19 +70,19 @@ public class WorkRecordStepConfig {
     @Bean
     public Step workRecordComputeStep(
             ListItemReader<Long> workRecordReader,
-            ItemProcessor<Long, List<WorkRecord>> workRecordProcessor,
-            ItemWriter<List<WorkRecord>> workRecordWriter
+            ItemProcessor<Long, WorkRecord> workRecordProcessor,
+            ItemWriter<WorkRecord> workRecordWriter
     ) {
         return new StepBuilder("workRecordComputeStep", jobRepository)
-                .<Long, List<WorkRecord>>chunk(CHUNK_SIZE, domainTransactionManager)
+                .<Long, WorkRecord>chunk(CHUNK_SIZE, domainTransactionManager)
                 .reader(workRecordReader)
                 .processor(workRecordProcessor)
                 .writer(workRecordWriter)
-                .listener((Object) workRecordJobExecutionListener) // Job + Step 시작/종료
-                .listener((Object) workRecordChunkListener)        // Chunk 진행률
-                .listener((Object) workRecordItemReadListener)     // Read 단계
-                .listener((Object) workRecordItemProcessListener)  // Process 단계
-                .listener((Object) workRecordItemWriteListener)    // Write 단계
+                .listener((Object) workRecordJobExecutionListener)
+                .listener((Object) workRecordChunkListener)
+                .listener((Object) workRecordItemReadListener)
+                .listener((Object) workRecordItemProcessListener)
+                .listener((Object) workRecordItemWriteListener)
                 .faultTolerant()
                 .skip(BatchException.class)
                 .skipLimit(SKIP_LIMIT)
@@ -84,7 +93,10 @@ public class WorkRecordStepConfig {
     }
 
     /**
-     * targetDate에 퇴근 완료(outTime != null)된 사원 목록을 읽는다.
+     * targetDate에 근태 활동이 있는 memberId 목록을 읽습니다.
+     *
+     * <p>출퇴근 완료, 승인된 휴가·출장·외근을 모두 포함하므로
+     * 외근만 있는 날이나 연차만 있는 날도 정산 대상에 포함됩니다.</p>
      */
     @Bean
     @StepScope
@@ -92,42 +104,47 @@ public class WorkRecordStepConfig {
             @Value("#{jobParameters['targetDate']}") String targetDate
     ) {
         LocalDate date = LocalDate.parse(targetDate);
-        List<Long> memberIds = commuteRepository.findMemberIdsWithCompletedCommuteByDate(date);
+        java.time.LocalDateTime startOfDay = date.atStartOfDay();
+        java.time.LocalDateTime nextDay = date.plusDays(1).atStartOfDay();
+
+        Set<Long> memberIds = new LinkedHashSet<>();
+        memberIds.addAll(commuteRepository.findMemberIdsWithCompletedCommuteByDate(date));
+        memberIds.addAll(leaveRepository.findApprovedMemberIdsByDate(startOfDay, nextDay));
+        memberIds.addAll(businessTripRepository.findApprovedMemberIdsByDate(startOfDay, nextDay));
+        memberIds.addAll(fieldWorkRepository.findApprovedMemberIdsByWorkDate(startOfDay, nextDay));
+
         log.info("[WorkRecord] 처리 대상 인원: {}명 ({})", memberIds.size(), date);
-        return new ListItemReader<>(memberIds);
+        return new ListItemReader<>(List.copyOf(memberIds));
     }
 
     /**
-     * memberId → List&lt;WorkRecord&gt; 변환.
-     * idempotency 처리와 슬롯 산출은 WorkRecordComputeProcessor가 담당한다.
+     * memberId → WorkRecord(집계) 변환.
+     * 활동이 없으면 null 반환 → batch가 filter-out.
      */
     @Bean
     @StepScope
-    public ItemProcessor<Long, List<WorkRecord>> workRecordProcessor(
+    public ItemProcessor<Long, WorkRecord> workRecordProcessor(
             @Value("#{jobParameters['targetDate']}") String targetDate
     ) {
         return memberId -> {
             LocalDate date = LocalDate.parse(targetDate);
-            List<WorkRecord> slots = workRecordComputeProcessor.compute(memberId, date);
-            if (slots.isEmpty()) {
-                log.debug("[WorkRecord] 생성 슬롯 없음 skip: memberId={}", memberId);
-                return null;
+            WorkRecord record = workRecordComputeProcessor.compute(memberId, date);
+            if (record == null) {
+                log.debug("[WorkRecord] 집계 결과 없음 skip: memberId={}", memberId);
             }
-            return slots;
+            return record;
         };
     }
 
     /**
-     * List&lt;WorkRecord&gt; 배치 저장.
+     * WorkRecord 저장.
      */
     @Bean
-    public ItemWriter<List<WorkRecord>> workRecordWriter() {
+    public ItemWriter<WorkRecord> workRecordWriter() {
         return chunk -> {
-            List<WorkRecord> all = chunk.getItems().stream()
-                    .flatMap(List::stream)
-                    .toList();
-            workRecordRepository.saveAll(all);
-            log.debug("[WorkRecord] WorkRecord {} 건 저장", all.size());
+            List<? extends WorkRecord> records = chunk.getItems();
+            workRecordRepository.saveAll(records);
+            log.debug("[WorkRecord] {}건 저장 완료", records.size());
         };
     }
 }

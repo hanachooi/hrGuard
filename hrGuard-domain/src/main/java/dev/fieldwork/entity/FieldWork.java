@@ -20,8 +20,7 @@ import java.time.LocalDateTime;
 @Builder
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
-@Table(name = "field_work",
-        indexes = @Index(name = "idx_field_work_member", columnList = "member_id"))
+@Table(name = "field_work", indexes = @Index(name = "idx_field_work_member", columnList = "member_id"))
 public class FieldWork extends BaseEntity {
 
     @Id
@@ -51,19 +50,13 @@ public class FieldWork extends BaseEntity {
     @Column(name = "reject_reason", length = 500)
     private String rejectReason;
 
-    public static FieldWork apply(Long memberId,
-                                  LocalDateTime startDateTime, LocalDateTime endDateTime,
-                                  String location, String purpose) {
+    public static FieldWork apply(Long memberId, LocalDateTime startDateTime,
+                                  LocalDateTime endDateTime, String location, String purpose) {
+
         if (!endDateTime.isAfter(startDateTime)) {
             throw new FieldWorkException(FieldWorkError.INVALID_TIME_RANGE);
         }
-        return FieldWork.builder()
-                .memberId(memberId)
-                .startDateTime(startDateTime)
-                .endDateTime(endDateTime)
-                .location(location)
-                .purpose(purpose)
-                .build();
+        return FieldWork.builder().memberId(memberId).startDateTime(startDateTime).endDateTime(endDateTime).location(location).purpose(purpose).build();
     }
 
     public void approve() {
