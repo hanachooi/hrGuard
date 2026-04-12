@@ -1,4 +1,4 @@
-package dev.attendance.businesstrip.service.request;
+package dev.businesstrip.service.request;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;

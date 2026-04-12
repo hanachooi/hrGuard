@@ -1,15 +1,15 @@
-package dev.attendance.leave.service.response;
+package dev.leave.service.response;
 
 import dev.leave.constant.LeaveStatus;
 import dev.leave.constant.LeaveType;
 import dev.leave.entity.Leave;
 
-import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 public record AnnualLeaveResponse(
         Long id,
-        LocalDate startDate,
-        LocalDate endDate,
+        LocalDateTime startDateTime,
+        LocalDateTime endDateTime,
         LeaveType leaveType,
         String reason,
         LeaveStatus status,
@@ -19,8 +19,8 @@ public record AnnualLeaveResponse(
     public static AnnualLeaveResponse from(Leave leave) {
         return new AnnualLeaveResponse(
                 leave.getId(),
-                leave.getStartDate(),
-                leave.getEndDate(),
+                leave.getStartDateTime(),
+                leave.getEndDateTime(),
                 leave.getLeaveType(),
                 leave.getReason(),
                 leave.getStatus(),

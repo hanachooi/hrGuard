@@ -1,6 +1,6 @@
-package dev.attendance.leave.service.response;
+package dev.leave.service.response;
 
-import dev.attendance.leave.entity.AnnualLeaveBalance;
+import dev.leave.entity.LeaveBalance;
 
 public record AnnualLeaveBalanceResponse(
         Long memberId,
@@ -9,7 +9,7 @@ public record AnnualLeaveBalanceResponse(
         double usedDays,
         double remainingDays
 ) {
-    public static AnnualLeaveBalanceResponse from(AnnualLeaveBalance balance) {
+    public static AnnualLeaveBalanceResponse from(LeaveBalance balance) {
         return new AnnualLeaveBalanceResponse(
                 balance.getMemberId(),
                 balance.getYear(),

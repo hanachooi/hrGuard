@@ -1,14 +1,14 @@
-package dev.attendance.businesstrip.service.response;
+package dev.businesstrip.service.response;
 
-import dev.attendance.businesstrip.constant.BusinessTripStatus;
-import dev.attendance.businesstrip.entity.BusinessTrip;
+import dev.businesstrip.constant.BusinessTripStatus;
+import dev.businesstrip.entity.BusinessTrip;
 
-import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 public record BusinessTripResponse(
         Long id,
-        LocalDate startDate,
-        LocalDate endDate,
+        LocalDateTime startDateTime,
+        LocalDateTime endDateTime,
         String destination,
         String purpose,
         BusinessTripStatus status,
@@ -17,8 +17,8 @@ public record BusinessTripResponse(
     public static BusinessTripResponse from(BusinessTrip trip) {
         return new BusinessTripResponse(
                 trip.getId(),
-                trip.getStartDate(),
-                trip.getEndDate(),
+                trip.getStartDateTime(),
+                trip.getEndDateTime(),
                 trip.getDestination(),
                 trip.getPurpose(),
                 trip.getStatus(),

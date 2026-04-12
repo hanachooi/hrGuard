@@ -1,16 +1,14 @@
-package dev.attendance.fieldwork.service.response;
+package dev.fieldwork.service.response;
 
-import dev.attendance.fieldwork.entity.FieldWork;
 import dev.fieldwork.constant.FieldWorkStatus;
+import dev.fieldwork.entity.FieldWork;
 
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 public record FieldWorkResponse(
         Long id,
-        LocalDate workDate,
-        LocalDateTime startTime,
-        LocalDateTime endTime,
+        LocalDateTime startDateTime,
+        LocalDateTime endDateTime,
         String location,
         String purpose,
         FieldWorkStatus status,
@@ -19,9 +17,8 @@ public record FieldWorkResponse(
     public static FieldWorkResponse from(FieldWork fieldWork) {
         return new FieldWorkResponse(
                 fieldWork.getId(),
-                fieldWork.getWorkDate(),
-                fieldWork.getStartTime(),
-                fieldWork.getEndTime(),
+                fieldWork.getStartDateTime(),
+                fieldWork.getEndDateTime(),
                 fieldWork.getLocation(),
                 fieldWork.getPurpose(),
                 fieldWork.getStatus(),

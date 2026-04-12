@@ -1,6 +1,7 @@
 package dev.common.interceptor;
 
 import dev.common.jwt.TokenProvider;
+import dev.member.constant.MemberRole;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -25,7 +26,9 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         }
 
         Long memberId = tokenProvider.extractMemberId(token);
+        MemberRole role = tokenProvider.extractRole(token);
         request.setAttribute("memberId", memberId);
+        request.setAttribute("memberRole", role);
 
         return true;
     }

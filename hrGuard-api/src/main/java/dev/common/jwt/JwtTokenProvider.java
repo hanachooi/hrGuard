@@ -1,5 +1,6 @@
 package dev.common.jwt;
 
+import dev.member.constant.MemberRole;
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
@@ -15,8 +16,8 @@ import java.util.Date;
 @Component
 public class JwtTokenProvider implements TokenProvider {
 
-    private static final long ACCESS_TOKEN_EXPIRE_TIME = 1000 * 60 * 60 * 24; // 24시간
     private final SecretKey key;
+    private static final long ACCESS_TOKEN_EXPIRE_TIME = 1000 * 60 * 60 * 100; // 100시간
 
     public JwtTokenProvider(@Value("${jwt.secret}") String secretKey) {
         byte[] keyBytes = Decoders.BASE64.decode(secretKey);
@@ -24,12 +25,13 @@ public class JwtTokenProvider implements TokenProvider {
     }
 
     @Override
-    public JwtToken generateToken(Long memberId) {
+    public JwtToken generateToken(Long memberId, MemberRole role) {
         long now = System.currentTimeMillis();
         Date expiryDate = new Date(now + ACCESS_TOKEN_EXPIRE_TIME);
 
         String accessToken = Jwts.builder()
                 .subject(String.valueOf(memberId))
+                .claim("role", role.name())
                 .issuedAt(new Date(now))
                 .expiration(expiryDate)
                 .signWith(key)
@@ -69,5 +71,15 @@ public class JwtTokenProvider implements TokenProvider {
                 .parseSignedClaims(token)
                 .getPayload();
         return Long.valueOf(claims.getSubject());
+    }
+
+    @Override
+    public MemberRole extractRole(String token) {
+        Claims claims = Jwts.parser()
+                .verifyWith(key)
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
+        return MemberRole.valueOf(claims.get("role", String.class));
     }
 }

@@ -1,4 +1,4 @@
-package dev.attendance.leave.service.request;
+package dev.leave.service.request;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;

@@ -2,6 +2,7 @@ package dev.common.configuration;
 
 import dev.common.apikey.ApiKeyProperties;
 import dev.common.identity.resolver.AuthMemberIdArgumentResolver;
+import dev.common.interceptor.AdminAuthInterceptor;
 import dev.common.interceptor.ApiKeyAuthInterceptor;
 import dev.common.interceptor.JwtAuthInterceptor;
 import dev.common.jwt.TokenProvider;
@@ -24,6 +25,7 @@ import java.util.List;
 public class WebMvcConfiguration implements WebMvcConfigurer {
 
     public static final String CLOSED_API_PREFIX = "/api/v1/**";
+    public static final String ADMIN_API_PREFIX = "/api/v1/admin/**";
     public static final String PUBLIC_API_PREFIX = "/api/public/**";
     public static final String EXTERNAL_API_PREFIX = "/api/external/**";
     public static final String VIEW_PAGE_PREFIX = "/view/**";
@@ -50,8 +52,15 @@ public class WebMvcConfiguration implements WebMvcConfigurer {
                         "/css/**",
                         "/images/**",
                         "/assets/**",
-                        "/index.html"
+                        "/index.html",
+                        "/swagger-ui/**",
+                        "/swagger-ui.html",
+                        "/v3/api-docs/**"
                 );
+
+        // 관리자 전용: ADMIN 역할 검증 (JWT 인터셉터 이후 실행)
+        registry.addInterceptor(new AdminAuthInterceptor())
+                .addPathPatterns(ADMIN_API_PREFIX);
 
         // 외부 장치/시스템용: API Key 검증
         registry.addInterceptor(new ApiKeyAuthInterceptor(apiKeyProperties))
