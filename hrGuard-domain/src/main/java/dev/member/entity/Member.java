@@ -1,8 +1,11 @@
 package dev.member.entity;
 
 import dev.common.BaseEntity;
+import dev.member.constant.MemberRole;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
@@ -22,15 +25,23 @@ public class Member extends BaseEntity {
     @Column(name = "email", nullable = false, unique = true)
     private String email;
 
+    private Long companyId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "role", nullable = false, length = 20)
+    private MemberRole role;
+
     @Builder
     public Member(
             String name,
             String password,
-            String email
+            String email,
+            MemberRole role
     ) {
         this.name = name;
         this.password = password;
         this.email = email;
+        this.role = role;
     }
 
     public static Member create(
@@ -42,6 +53,7 @@ public class Member extends BaseEntity {
                 .name(name)
                 .password(encodedPassword)
                 .email(email)
+                .role(MemberRole.USER)
                 .build();
     }
 }

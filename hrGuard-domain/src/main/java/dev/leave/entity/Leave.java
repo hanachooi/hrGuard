@@ -8,17 +8,14 @@ import dev.leave.exception.LeaveException;
 import jakarta.persistence.*;
 import lombok.*;
 
-import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
+import java.time.Duration;
+import java.time.LocalDateTime;
 
 /**
  * 휴가 신청 엔티티.
  *
- * <p>승인(APPROVED) 시 신청 기간의 각 날짜에 대해
- * {@link dev.payroll.entity.WorkRecord}(ANNUAL_LEAVE 유형)가 자동 생성됩니다.</p>
- *
- * <h3>반차 신청 제약</h3>
- * HALF_AM / HALF_PM은 단일 날짜만 허용 (startDate == endDate).
+ * <p>출장과 동일하게 startDateTime~endDateTime 시간 범위로 관리합니다.
+ * 반차·반반차는 유형 구분 없이 시간 범위로 표현됩니다.</p>
  */
 @Entity
 @Getter
@@ -26,7 +23,7 @@ import java.time.temporal.ChronoUnit;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Table(name = "leaves",
-        indexes = @Index(name = "idx_leaves_member", columnList = "member_id, start_date"))
+        indexes = @Index(name = "idx_leaves_member", columnList = "member_id, start_date_time"))
 public class Leave extends BaseEntity {
 
     @Id
@@ -36,11 +33,11 @@ public class Leave extends BaseEntity {
     @Column(name = "member_id", nullable = false)
     private Long memberId;
 
-    @Column(name = "start_date", nullable = false)
-    private LocalDate startDate;
+    @Column(name = "start_date_time", nullable = false)
+    private LocalDateTime startDateTime;
 
-    @Column(name = "end_date", nullable = false)
-    private LocalDate endDate;
+    @Column(name = "end_date_time", nullable = false)
+    private LocalDateTime endDateTime;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "leave_type", nullable = false)
@@ -59,19 +56,16 @@ public class Leave extends BaseEntity {
 
     // ── 팩토리 ───────────────────────────────────────────────────────────────
 
-    public static Leave apply(Long memberId, LocalDate startDate, LocalDate endDate,
+    public static Leave apply(Long memberId,
+                              LocalDateTime startDateTime, LocalDateTime endDateTime,
                               LeaveType leaveType, String reason) {
-        if (endDate.isBefore(startDate)) {
+        if (!endDateTime.isAfter(startDateTime)) {
             throw new LeaveException(LeaveError.INVALID_DATE_RANGE);
-        }
-        if ((leaveType == LeaveType.HALF_AM || leaveType == LeaveType.HALF_PM)
-                && !startDate.equals(endDate)) {
-            throw new LeaveException(LeaveError.HALF_DAY_MUST_BE_SINGLE_DATE);
         }
         return Leave.builder()
                 .memberId(memberId)
-                .startDate(startDate)
-                .endDate(endDate)
+                .startDateTime(startDateTime)
+                .endDateTime(endDateTime)
                 .leaveType(leaveType)
                 .reason(reason)
                 .build();
@@ -95,12 +89,12 @@ public class Leave extends BaseEntity {
     }
 
     /**
-     * 연차 잔여일수 차감 일수.
-     * HALF_AM / HALF_PM = 0.5일, 그 외 = 신청 기간 내 일수 × 1.0.
+     * 연차 잔여일수 차감량 — 8시간 = 1일 기준.
+     * 예) 4시간(반차) → 0.5일, 2시간(반반차) → 0.25일
      */
     public double getDeductionDays() {
         if (!leaveType.deductsBalance()) return 0.0;
-        long days = ChronoUnit.DAYS.between(startDate, endDate) + 1;
-        return days * leaveType.daysPerUnit();
+        long minutes = Duration.between(startDateTime, endDateTime).toMinutes();
+        return minutes / (8.0 * 60.0);
     }
 }

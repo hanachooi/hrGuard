@@ -35,7 +35,7 @@ public class MemberService {
         if (!passwordEncoder.matches(request.getPassword(), member.getPassword())) {
             throw new MemberException(MemberError.PASSWORD_NOT_MATCHED);
         }
-        JwtToken token = tokenProvider.generateToken(member.getId());
+        JwtToken token = tokenProvider.generateToken(member.getId(), member.getRole());
         return JwtTokenResponse.from(token);
     }
 }
