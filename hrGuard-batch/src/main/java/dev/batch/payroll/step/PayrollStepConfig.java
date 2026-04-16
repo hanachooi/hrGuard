@@ -12,7 +12,7 @@ import dev.payroll.service.WorkTimeResult;
 import dev.workrecord.entity.WorkRecord;
 import dev.workrecord.repository.WorkRecordRepository;
 import dev.workschedule.entity.WorkSchedule;
-import dev.workschedule.repository.WorkScheduleRepository;
+import dev.workschedule.service.WorkScheduleService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.ExitStatus;
@@ -36,19 +36,6 @@ import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * WorkRecord 일별 집계 → MonthlyPayroll 정산 Step.
- *
- * <p>WorkRecord에 이미 배치(WorkRecordComputeProcessor)가 산출한
- * regularMinutes, overtimeMinutes, nightMinutes, holidayMinutes, holidayOvertimeMinutes가
- * 저장되어 있으므로, 이 Step은 단순히 분→시간 변환 후 WageCalculator에 위임합니다.</p>
- *
- * <h3>TimeSegmentSplitter 제거 근거</h3>
- * <p>기존에는 WorkRecord의 interval(startTime~endTime)을 순회하며
- * TimeSegmentSplitter가 연장/야간/휴일을 실시간 계산했습니다.
- * 리팩토링 후에는 계산이 WorkRecord 배치에서 완료되므로
- * 정산 배치는 조회→변환→저장만 수행합니다.</p>
- */
 @Slf4j
 @Configuration
 @RequiredArgsConstructor
@@ -62,14 +49,13 @@ public class PayrollStepConfig {
     private final WorkRecordRepository workRecordRepository;
     private final MonthlyPayrollRepository monthlyPayrollRepository;
     private final PayrollItemRepository payrollItemRepository;
-    private final WorkScheduleRepository workScheduleRepository;
+    private final WorkScheduleService workScheduleService;
     private final WageCalculator wageCalculator;
     private final PayrollChunkListener payrollChunkListener;
     private final PayrollSkipListener payrollSkipListener;
     private final PayrollItemReadListener payrollItemReadListener;
     private final PayrollItemProcessListener payrollItemProcessListener;
     private final PayrollItemWriteListener payrollItemWriteListener;
-
     @Qualifier(TransactionManagerConfig.DOMAIN_TRANSACTION_MANAGER)
     private final PlatformTransactionManager domainTransactionManager;
 
@@ -118,14 +104,15 @@ public class PayrollStepConfig {
                 log.info("""
                                 ===== [payrollStep 완료] =====
                                   상태            : {}
-                                  처리 청크 수    : {} 건
+                                  처리 청크 수    : {} 건  (트랜잭션 커밋 {}회)
                                   읽은 인원       : {} 명
                                   정산 완료       : {} 명
-                                  스케줄 없음 skip: {} 명
+                                  멤버 skip       : {} 명
                                   롤백            : {} 회
                                   정산 성공률     : {}%
                                 ===============================""",
                         stepExecution.getStatus(),
+                        stepExecution.getCommitCount(),
                         stepExecution.getCommitCount(),
                         stepExecution.getReadCount(),
                         stepExecution.getWriteCount(),
@@ -138,9 +125,7 @@ public class PayrollStepConfig {
         };
     }
 
-    /**
-     * 해당 월에 WorkRecord가 있는 memberId 목록 조회.
-     */
+    // 해당 월에 근무 기록이 있는 memberId 목록
     @Bean
     @StepScope
     public ListItemReader<Long> payrollReader(
@@ -148,22 +133,18 @@ public class PayrollStepConfig {
     ) {
         YearMonth ym = YearMonth.parse(yearMonth);
         List<Long> memberIds = workRecordRepository.findDistinctMemberIdsByBizDateBetween(
-                ym.atDay(1), ym.atEndOfMonth());
+                ym.atDay(1), ym.atEndOfMonth()
+        );
         log.info("급여 계산 대상 인원: {}명 ({})", memberIds.size(), yearMonth);
         return new ListItemReader<>(memberIds);
     }
 
     /**
-     * WorkRecord 일별 집계 → MonthlyPayroll 생성.
+     * memberId 1명의 해당 월 WorkRecord를 읽어 MonthlyPayroll을 생성합니다.
      *
-     * <p>WorkRecord에 이미 regularMinutes, overtimeMinutes, nightMinutes,
-     * holidayMinutes, holidayOvertimeMinutes가 저장되어 있으므로
-     * 시간 단위로 변환 후 WageCalculator에 위임합니다.</p>
-     *
-     * <h3>skip 조건 (null 반환)</h3>
-     * <ul>
-     *   <li>WorkSchedule 없음 (시급 정보 부재)</li>
-     * </ul>
+     * <p>WorkRecord는 이미 regularMinutes, overtimeMinutes, nightMinutes,
+     * holidayMinutes, holidayOvertimeMinutes가 집계된 상태이므로
+     * 분 → 시간 변환 후 WageCalculator에 바로 전달합니다.</p>
      */
     @Bean
     @StepScope
@@ -173,15 +154,11 @@ public class PayrollStepConfig {
         return memberId -> {
             YearMonth ym = YearMonth.parse(yearMonth);
 
-            WorkSchedule schedule = workScheduleRepository.findByMemberId(memberId).orElse(null);
-            if (schedule == null) {
-                log.warn("WorkSchedule 없음, skip: memberId={}", memberId);
-                return null;
-            }
+            WorkSchedule schedule = workScheduleService.findByMemberId(memberId);
             int hourlyWage = schedule.getHourlyWage();
 
-            List<WorkRecord> records = workRecordRepository.findByMemberIdAndBizDateBetween(
-                    memberId, ym.atDay(1), ym.atEndOfMonth());
+            List<WorkRecord> records = workRecordRepository
+                    .findByMemberIdAndBizDateBetween(memberId, ym.atDay(1), ym.atEndOfMonth());
 
             MonthlyPayroll payroll = MonthlyPayroll.builder()
                     .memberId(memberId)
@@ -192,7 +169,6 @@ public class PayrollStepConfig {
             List<PayrollItem> allItems = new ArrayList<>();
 
             for (WorkRecord record : records) {
-                // WorkRecord 집계 필드(분)를 시간(double)으로 변환해 WageCalculator에 위임
                 WorkTimeResult result = new WorkTimeResult(
                         record.getRegularMinutes() / 60.0,
                         record.getOvertimeMinutes() / 60.0,
@@ -206,6 +182,9 @@ public class PayrollStepConfig {
             long total = allItems.stream().mapToLong(PayrollItem::getAmount).sum();
             payroll.updateTotalAmount(total);
             payroll.setPendingItems(allItems);
+
+            log.debug("급여 계산 완료: memberId={}, {}년 {}월, 근무기록={}건, 총액={}원",
+                    memberId, ym.getYear(), ym.getMonthValue(), records.size(), total);
             return payroll;
         };
     }

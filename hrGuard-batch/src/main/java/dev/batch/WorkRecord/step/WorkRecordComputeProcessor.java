@@ -26,7 +26,7 @@ import java.util.Set;
 /**
  * Commute + Leave + BusinessTrip + FieldWork → WorkRecord(일별 집계) 산출 핵심 알고리즘.
  *
- * <p>원천 데이터 전체를 읽어 시간 보정·차집합·수당 분류를 수행한 뒤,
+ * <p>원천 데이터 전체를 읽어 차집합·수당 분류를 수행한 뒤,
  * {@code WorkRecord}에 분 단위 집계값을 저장합니다.
  * 매 실행 시 기존 레코드를 삭제하고 재생성하므로 멱등하게 실행됩니다.</p>
  *
@@ -36,17 +36,15 @@ import java.util.Set;
  *   2. BusinessTrip(출장) 승인 → 소정 근무 시간 전체 → businessTripMinutes
  *   3. FieldWork(외근) 승인 → 신청 시간 그대로 → fieldWorkMinutes
  *   4. blocked = leave + businessTrip + fieldWork (시작 시각 오름차순)
- *   5. Commute 기반 gap 보정 + 차집합 → officeMinutes
+ *   5. Commute 기반 차집합 → officeMinutes (C-end soft clamp 적용)
  *   6. 야간 시간: OFFICE 구간 + FIELD 구간에서 22:00~06:00 교집합 → nightMinutes
  *   7. 소정 휴일 여부 판단 → OFFICE 구간 + FIELD 구간에서 정규/연장/휴일/휴일연장 분류 → 각 수당 minutes 저장
  * </pre>
  *
- * <h3>gap 보정 4종</h3>
+ * <h3>퇴근 soft clamp</h3>
  * <pre>
- *  A. 퇴실 직후 blocked 시작 gap ≤ GAP_MERGE_MINUTES → effectiveEnd 확장
- *  B. 입실 직전 blocked 종료 gap ≤ GAP_MERGE_MINUTES → effectiveStart 당김
- *  C-start. 입실이 workStart보다 ≤ GAP_MERGE_MINUTES 이내 빠름 → workStart로 clamp
- *  C-end. 퇴실이 workEnd보다 ≤ GAP_MERGE_MINUTES 이내 늦음 → workEnd로 clamp
+ *  퇴근이 근무표 퇴근시간보다 END_CLAMP_MINUTES 미만으로 늦으면 → scheduleEnd로 clamp
+ *  END_CLAMP_MINUTES 이상 늦으면 → 실제 퇴근시간 그대로 사용 (연장 인정)
  * </pre>
  */
 @Slf4j
@@ -54,7 +52,7 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class WorkRecordComputeProcessor {
 
-    static final long GAP_MERGE_MINUTES = 15;
+    static final long END_CLAMP_MINUTES = 30;
     static final long MIN_SLOT_MINUTES = 10;
 
     private static final LocalTime DEFAULT_START = LocalTime.of(9, 0);
@@ -120,7 +118,7 @@ public class WorkRecordComputeProcessor {
         blocked.addAll(fwIntervals);
         blocked.sort(Comparator.comparing(Interval::start));
 
-        // ── 5. Commute → OFFICE 구간 (gap 보정 + 차집합) ─────────────────────────
+        // ── 5. Commute → OFFICE 구간 (C-end clamp + blocked 차집합) ────────────────
         List<Commute> periods = commuteRepository
                 .findByMemberIdAndWorkDateOrderByInTimeAsc(memberId, targetDate)
                 .stream()
@@ -130,10 +128,8 @@ public class WorkRecordComputeProcessor {
 
         List<Interval> officeIntervals = new ArrayList<>();
         for (Commute period : periods) {
-            LocalDateTime effectiveStart = clampToScheduleStart(period.getInTime(), scheduleStart, targetDate);
+            LocalDateTime effectiveStart = period.getInTime();
             LocalDateTime effectiveEnd = clampToScheduleEnd(period.getOutTime(), scheduleEnd, targetDate);
-            effectiveStart = absorbGapBeforeSession(effectiveStart, blocked);
-            effectiveEnd = absorbGapAfterSession(effectiveEnd, blocked);
 
             if (!effectiveEnd.isAfter(effectiveStart)) continue;
 
@@ -161,19 +157,21 @@ public class WorkRecordComputeProcessor {
         // ── 7. 정산용 시간 분류 ─────────────────────────────────────────────────────
         boolean isHoliday = !workDays.contains(targetDate.getDayOfWeek());
 
-        // 휴가는 법정 휴게시간 미차감 (근로기준법상 휴가는 유급으로 그대로 지급)
+        // 휴게는 실 근무(office+BT+FW) 기준 차감 — 휴가는 미포함
         double nonLeaveHours = deductBreakTime((officeMinutes + fwMinutes + btMinutes) / 60.0);
+        // 휴가는 소정근로시간으로 인정 (정규 산정에 포함)
         double totalHours = nonLeaveHours + (leaveMinutes / 60.0);
 
+        // 연장·휴일연장은 실제 근무(office+BT+FW)만 기준 — 휴가는 초과수당 미적용
         int regularMinutes, overtimeMinutes, holidayMinutes, holidayOvertimeMinutes;
         if (isHoliday) {
             holidayMinutes = toMinutes(Math.min(totalHours, dailyWorkHours));
-            holidayOvertimeMinutes = toMinutes(Math.max(0, totalHours - dailyWorkHours));
+            holidayOvertimeMinutes = toMinutes(Math.max(0, nonLeaveHours - dailyWorkHours));
             regularMinutes = 0;
             overtimeMinutes = 0;
         } else {
             regularMinutes = toMinutes(Math.min(totalHours, dailyWorkHours));
-            overtimeMinutes = toMinutes(Math.max(0, totalHours - dailyWorkHours));
+            overtimeMinutes = toMinutes(Math.max(0, nonLeaveHours - dailyWorkHours));
             holidayMinutes = 0;
             holidayOvertimeMinutes = 0;
         }
@@ -219,46 +217,13 @@ public class WorkRecordComputeProcessor {
                 : java.util.Optional.empty();
     }
 
-    // ── gap 보정: (A) 퇴실 직후 blocked 시작 흡수 ────────────────────────────────
-
-    private LocalDateTime absorbGapAfterSession(LocalDateTime end, List<Interval> blocked) {
-        for (Interval block : blocked) {
-            if (!block.start().isAfter(end)) continue;
-            long gap = Duration.between(end, block.start()).toMinutes();
-            if (gap <= GAP_MERGE_MINUTES) return block.start();
-            break;
-        }
-        return end;
-    }
-
-    // ── gap 보정: (B) 입실 직전 blocked 종료 흡수 ────────────────────────────────
-
-    private LocalDateTime absorbGapBeforeSession(LocalDateTime start, List<Interval> blocked) {
-        for (int i = blocked.size() - 1; i >= 0; i--) {
-            Interval block = blocked.get(i);
-            if (block.end().isAfter(start)) continue;
-            long gap = Duration.between(block.end(), start).toMinutes();
-            return gap <= GAP_MERGE_MINUTES ? block.end() : start;
-        }
-        return start;
-    }
-
-    // ── gap 보정: (C-start) 입실 clamp ──────────────────────────────────────────
-
-    private LocalDateTime clampToScheduleStart(LocalDateTime inTime, LocalTime scheduleStart, LocalDate date) {
-        LocalDateTime workStart = LocalDateTime.of(date, scheduleStart);
-        if (!inTime.isBefore(workStart)) return inTime;
-        long gap = Duration.between(inTime, workStart).toMinutes();
-        return gap <= GAP_MERGE_MINUTES ? workStart : inTime;
-    }
-
-    // ── gap 보정: (C-end) 퇴실 clamp ────────────────────────────────────────────
+    // ── 퇴근 soft clamp : 근무표 퇴근시간 + END_CLAMP_MINUTES 미만이면 clamp ──
 
     private LocalDateTime clampToScheduleEnd(LocalDateTime outTime, LocalTime scheduleEnd, LocalDate date) {
         LocalDateTime workEnd = LocalDateTime.of(date, scheduleEnd);
         if (!outTime.isAfter(workEnd)) return outTime;
         long gap = Duration.between(workEnd, outTime).toMinutes();
-        return gap <= GAP_MERGE_MINUTES ? workEnd : outTime;
+        return gap < END_CLAMP_MINUTES ? workEnd : outTime;
     }
 
     // ── cursor 전진 방식 빈 구간 계산 ────────────────────────────────────────────
@@ -306,9 +271,14 @@ public class WorkRecordComputeProcessor {
         return nightMinutes / 60.0;
     }
 
-    // ── 근로기준법 제54조 휴게시간 차감 ─────────────────────────────────────────
+    // ── 근로기준법 제54조 휴게시간 차감 (실 근무 기준) ──────────────────────────
+    // > 10h : -1.5h  (기본 1h + 연장 구간 0.5h)
+    // 8h~10h: -1.0h
+    // 4h~8h : -0.5h
+    // < 4h  : 없음
 
     private double deductBreakTime(double rawHours) {
+        if (rawHours > 10.0) return rawHours - 1.5;
         if (rawHours >= 8.0) return rawHours - 1.0;
         if (rawHours >= 4.0) return rawHours - 0.5;
         return rawHours;
