@@ -40,6 +40,14 @@ public enum BatchErrorCode implements CommonError {
             "근무 스케줄 정보가 존재하지 않습니다."),
 
     /**
+     * PayrollPolicy 미등록 — 정산 전 반드시 등록 필요 (Job 중단)
+     */
+    PAYROLL_POLICY_NOT_FOUND(
+            HttpStatusCode.NOT_FOUND,
+            "BATCH_404_2",
+            "급여 정산 정책이 등록되지 않았습니다. 정산 전 PayrollPolicy를 등록해 주세요."),
+
+    /**
      * Commute 퇴근 시각 미기록 (1건 skip 처리)
      */
     COMMUTE_OUT_TIME_MISSING(

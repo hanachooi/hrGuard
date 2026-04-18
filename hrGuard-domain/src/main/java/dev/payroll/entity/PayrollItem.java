@@ -4,6 +4,8 @@ import dev.payroll.constant.PayrollItemType;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.math.BigDecimal;
+
 // 급여 상세 항목 (기본급, 연장수당, 야간수당, 휴일수당 등)
 // MonthlyPayroll 1:N 구조로 정규화
 @Entity
@@ -30,6 +32,6 @@ public class PayrollItem {
     private double hours;
 
     // 해당 항목 금액 (원)
-    @Column(nullable = false)
-    private long amount;
+    @Column(nullable = false, precision = 15, scale = 0)
+    private BigDecimal amount;
 }

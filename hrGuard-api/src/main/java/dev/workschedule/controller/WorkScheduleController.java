@@ -18,7 +18,7 @@ public class WorkScheduleController {
 
     private final WorkScheduleService workScheduleService;
 
-    @GetMapping("/me")
+    @GetMapping
     public ResponseEntity<ApiResponse<WorkScheduleResponse>> getMySchedule(
             @AuthMemberId Long memberId
     ) {
@@ -27,7 +27,7 @@ public class WorkScheduleController {
         ));
     }
 
-    @PostMapping("/me")
+    @PostMapping
     public ResponseEntity<ApiResponse<WorkScheduleResponse>> createMySchedule(
             @AuthMemberId Long memberId,
             @Valid @RequestBody WorkScheduleUpsertRequest request
@@ -44,7 +44,7 @@ public class WorkScheduleController {
         ));
     }
 
-    @PutMapping("/me")
+    @PutMapping
     public ResponseEntity<ApiResponse<WorkScheduleResponse>> upsertMySchedule(
             @AuthMemberId Long memberId,
             @Valid @RequestBody WorkScheduleUpsertRequest request
