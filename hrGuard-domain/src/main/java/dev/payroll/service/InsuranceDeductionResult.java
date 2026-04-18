@@ -1,5 +1,7 @@
 package dev.payroll.service;
 
+import java.math.BigDecimal;
+
 /**
  * 4대보험 근로자 부담분 계산 결과 (2025년 기준).
  *
@@ -14,12 +16,12 @@ package dev.payroll.service;
  * <p>각 항목은 10원 단위 절사 처리됩니다.</p>
  */
 public record InsuranceDeductionResult(
-        long nationalPension,
-        long healthInsurance,
-        long longTermCare,
-        long employmentInsurance
+        BigDecimal nationalPension,
+        BigDecimal healthInsurance,
+        BigDecimal longTermCare,
+        BigDecimal employmentInsurance
 ) {
-    public long total() {
-        return nationalPension + healthInsurance + longTermCare + employmentInsurance;
+    public BigDecimal total() {
+        return nationalPension.add(healthInsurance).add(longTermCare).add(employmentInsurance);
     }
 }

@@ -35,6 +35,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import java.math.BigDecimal;
 import java.time.YearMonth;
 import java.time.temporal.WeekFields;
 import java.util.ArrayList;
@@ -240,22 +241,25 @@ public class PayrollStepConfig {
             payroll.updateOvertimeCheck(overtimeLimitExceeded, maxWeeklyOvertime);
 
             // ── 총 지급액 ─────────────────────────────────────────────────────
-            long total = allItems.stream().mapToLong(PayrollItem::getAmount).sum();
-            payroll.updateTotalAmount(total);
+            BigDecimal total = allItems.stream()
+                    .map(PayrollItem::getAmount)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            payroll.updateTotalAmount(total.longValue());
 
             // ── 4대보험 + 세금 공제 ───────────────────────────────────────────
-            long taxableIncome = Math.max(0L, total - nonTaxableMealAllowance);
+            BigDecimal taxableIncome = total.subtract(BigDecimal.valueOf(nonTaxableMealAllowance))
+                    .max(BigDecimal.ZERO);
 
             InsuranceDeductionResult insurance = insuranceCalculator.calculate(taxableIncome, ym.atDay(1));
             TaxDeductionResult tax = taxCalculator.calculate(taxableIncome, dependents, ym.atDay(1));
 
             payroll.updateDeductions(
-                    insurance.nationalPension(),
-                    insurance.healthInsurance(),
-                    insurance.longTermCare(),
-                    insurance.employmentInsurance(),
-                    tax.incomeTax(),
-                    tax.localIncomeTax()
+                    insurance.nationalPension().longValue(),
+                    insurance.healthInsurance().longValue(),
+                    insurance.longTermCare().longValue(),
+                    insurance.employmentInsurance().longValue(),
+                    tax.incomeTax().longValue(),
+                    tax.localIncomeTax().longValue()
             );
 
             payroll.setPendingItems(allItems);
@@ -267,6 +271,16 @@ public class PayrollStepConfig {
     public ItemWriter<MonthlyPayroll> payrollWriter() {
         return chunk -> {
             for (MonthlyPayroll payroll : chunk.getItems()) {
+                // 동일 (memberId, year, month) 레코드가 이미 존재하면 삭제 후 재삽입 (재실행 멱등성)
+                monthlyPayrollRepository
+                        .findByMemberIdAndYearAndMonth(payroll.getMemberId(), payroll.getYear(), payroll.getMonth())
+                        .ifPresent(existing -> {
+                            payrollItemRepository.deleteAll(
+                                    payrollItemRepository.findByMonthlyPayrollId(existing.getId()));
+                            monthlyPayrollRepository.delete(existing);
+                            monthlyPayrollRepository.flush();
+                        });
+
                 monthlyPayrollRepository.save(payroll);
                 payrollItemRepository.saveAll(payroll.getPendingItems());
                 log.info("급여 저장 완료: memberId={}, {}년 {}월, 총지급={}원, 총공제={}원, 실수령={}원, 주52h초과={}",

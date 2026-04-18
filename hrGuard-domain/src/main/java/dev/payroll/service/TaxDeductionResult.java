@@ -1,5 +1,7 @@
 package dev.payroll.service;
 
+import java.math.BigDecimal;
+
 /**
  * 근로소득세 원천징수 계산 결과.
  *
@@ -9,10 +11,10 @@ package dev.payroll.service;
  * </ul>
  */
 public record TaxDeductionResult(
-        long incomeTax,
-        long localIncomeTax
+        BigDecimal incomeTax,
+        BigDecimal localIncomeTax
 ) {
-    public long total() {
-        return incomeTax + localIncomeTax;
+    public BigDecimal total() {
+        return incomeTax.add(localIncomeTax);
     }
 }

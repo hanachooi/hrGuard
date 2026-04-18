@@ -34,33 +34,33 @@ public class MonthlyPayroll extends BaseEntity {
     // 해당 월 총 지급액 (원) — 수당 합계 (공제 전)
     @Builder.Default
     @Column(name = "total_amount", nullable = false)
-    private long totalAmount = 0;
+    private long totalAmount = 0L;
 
     // ── 4대보험 근로자 부담분 ─────────────────────────────────────────────
     @Builder.Default
     @Column(name = "national_pension", nullable = false)
-    private long nationalPension = 0;
+    private long nationalPension = 0L;
 
     @Builder.Default
     @Column(name = "health_insurance", nullable = false)
-    private long healthInsurance = 0;
+    private long healthInsurance = 0L;
 
     @Builder.Default
     @Column(name = "long_term_care", nullable = false)
-    private long longTermCare = 0;
+    private long longTermCare = 0L;
 
     @Builder.Default
     @Column(name = "employment_insurance", nullable = false)
-    private long employmentInsurance = 0;
+    private long employmentInsurance = 0L;
 
     // ── 세금 ──────────────────────────────────────────────────────────────
     @Builder.Default
     @Column(name = "income_tax", nullable = false)
-    private long incomeTax = 0;
+    private long incomeTax = 0L;
 
     @Builder.Default
     @Column(name = "local_income_tax", nullable = false)
-    private long localIncomeTax = 0;
+    private long localIncomeTax = 0L;
 
     // ── 집계 ──────────────────────────────────────────────────────────────
     /**
@@ -68,14 +68,14 @@ public class MonthlyPayroll extends BaseEntity {
      */
     @Builder.Default
     @Column(name = "total_deduction", nullable = false)
-    private long totalDeduction = 0;
+    private long totalDeduction = 0L;
 
     /**
      * 실수령액 = 총 지급액 - 총 공제액
      */
     @Builder.Default
     @Column(name = "net_pay", nullable = false)
-    private long netPay = 0;
+    private long netPay = 0L;
 
     // ── 주 52시간 한도 초과 여부 (근로기준법 제53조) ──────────────────────────
     /**
