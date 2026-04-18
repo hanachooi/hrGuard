@@ -1,18 +1,21 @@
 package dev.batch.payroll.step;
 
+import dev.batch.common.exception.BatchErrorCode;
 import dev.batch.common.exception.BatchException;
-import dev.batch.payroll.listener.*;
+import dev.batch.payroll.listener.PayrollChunkListener;
+import dev.batch.payroll.listener.PayrollSkipListener;
 import dev.common.configuration.TransactionManagerConfig;
 import dev.payroll.entity.MonthlyPayroll;
 import dev.payroll.entity.PayrollItem;
 import dev.payroll.repository.MonthlyPayrollRepository;
 import dev.payroll.repository.PayrollItemRepository;
-import dev.payroll.service.WageCalculator;
-import dev.payroll.service.WorkTimeResult;
+import dev.payroll.service.*;
+import dev.payrollpolicy.entity.PayrollPolicy;
+import dev.payrollpolicy.repository.PayrollPolicyRepository;
 import dev.workrecord.entity.WorkRecord;
 import dev.workrecord.repository.WorkRecordRepository;
 import dev.workschedule.entity.WorkSchedule;
-import dev.workschedule.service.WorkScheduleService;
+import dev.workschedule.repository.WorkScheduleRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.ExitStatus;
@@ -33,8 +36,11 @@ import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.time.YearMonth;
+import java.time.temporal.WeekFields;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Configuration
@@ -45,17 +51,22 @@ public class PayrollStepConfig {
     private static final int SKIP_LIMIT = 50;
     private static final int RETRY_LIMIT = 3;
 
+    /**
+     * 근로기준법 제53조: 주 연장근로 최대 12시간
+     */
+    private static final double WEEKLY_OVERTIME_LIMIT = 12.0;
+
     private final JobRepository jobRepository;
     private final WorkRecordRepository workRecordRepository;
     private final MonthlyPayrollRepository monthlyPayrollRepository;
     private final PayrollItemRepository payrollItemRepository;
-    private final WorkScheduleService workScheduleService;
+    private final WorkScheduleRepository workScheduleRepository;
+    private final PayrollPolicyRepository payrollPolicyRepository;
     private final WageCalculator wageCalculator;
+    private final InsuranceCalculator insuranceCalculator;
+    private final TaxCalculator taxCalculator;
     private final PayrollChunkListener payrollChunkListener;
     private final PayrollSkipListener payrollSkipListener;
-    private final PayrollItemReadListener payrollItemReadListener;
-    private final PayrollItemProcessListener payrollItemProcessListener;
-    private final PayrollItemWriteListener payrollItemWriteListener;
     @Qualifier(TransactionManagerConfig.DOMAIN_TRANSACTION_MANAGER)
     private final PlatformTransactionManager domainTransactionManager;
 
@@ -72,9 +83,6 @@ public class PayrollStepConfig {
                 .writer(payrollWriter)
                 .listener((Object) payrollChunkListener)
                 .listener(payrollStepListener())
-                .listener((Object) payrollItemReadListener)
-                .listener((Object) payrollItemProcessListener)
-                .listener((Object) payrollItemWriteListener)
                 .faultTolerant()
                 .skip(BatchException.class)
                 .skipLimit(SKIP_LIMIT)
@@ -107,7 +115,7 @@ public class PayrollStepConfig {
                                   처리 청크 수    : {} 건  (트랜잭션 커밋 {}회)
                                   읽은 인원       : {} 명
                                   정산 완료       : {} 명
-                                  멤버 skip       : {} 명
+                                  멤버 skip       : {} 명  (스케줄 없음)
                                   롤백            : {} 회
                                   정산 성공률     : {}%
                                 ===============================""",
@@ -125,7 +133,6 @@ public class PayrollStepConfig {
         };
     }
 
-    // 해당 월에 근무 기록이 있는 memberId 목록
     @Bean
     @StepScope
     public ListItemReader<Long> payrollReader(
@@ -142,9 +149,18 @@ public class PayrollStepConfig {
     /**
      * memberId 1명의 해당 월 WorkRecord를 읽어 MonthlyPayroll을 생성합니다.
      *
-     * <p>WorkRecord는 이미 regularMinutes, overtimeMinutes, nightMinutes,
-     * holidayMinutes, holidayOvertimeMinutes가 집계된 상태이므로
-     * 분 → 시간 변환 후 WageCalculator에 바로 전달합니다.</p>
+     * <h3>처리 흐름</h3>
+     * <pre>
+     *   WorkRecord 조회 (이미 분류된 정산용 집계 필드 보유)
+     *     → WageCalculator로 PayrollItem 생성
+     *     → 주차별 연장누계로 주 52시간 한도 체크
+     *     → InsuranceCalculator + TaxCalculator로 공제 계산
+     * </pre>
+     *
+     * <h3>skip 조건</h3>
+     * <ul>
+     *   <li>WorkSchedule 없음 → null 반환 (멤버 전체 skip)</li>
+     * </ul>
      */
     @Bean
     @StepScope
@@ -154,9 +170,25 @@ public class PayrollStepConfig {
         return memberId -> {
             YearMonth ym = YearMonth.parse(yearMonth);
 
-            WorkSchedule schedule = workScheduleService.findByMemberId(memberId);
+            // ── 시급 조회 ─────────────────────────────────────────────────────
+            WorkSchedule schedule = workScheduleRepository.findByMemberId(memberId)
+                    .orElse(null);
+            if (schedule == null) {
+                log.warn("WorkSchedule 없음, skip: memberId={}", memberId);
+                return null;
+            }
             int hourlyWage = schedule.getHourlyWage();
 
+            // ── 정산 설정 조회 (부양가족 수, 식대 비과세) ─────────────────────
+            PayrollPolicy payrollPolicy = payrollPolicyRepository.findByMemberId(memberId)
+                    .orElseThrow(() -> {
+                        log.error("PayrollPolicy 미등록, Job 중단: memberId={}", memberId);
+                        return new BatchException(BatchErrorCode.PAYROLL_POLICY_NOT_FOUND);
+                    });
+            int dependents = payrollPolicy.getDependents();
+            long nonTaxableMealAllowance = payrollPolicy.getNonTaxableMealAllowance();
+
+            // ── WorkRecord 조회 (member + biz_date unique, 1일 1건) ───────────
             List<WorkRecord> records = workRecordRepository
                     .findByMemberIdAndBizDateBetween(memberId, ym.atDay(1), ym.atEndOfMonth());
 
@@ -168,23 +200,65 @@ public class PayrollStepConfig {
 
             List<PayrollItem> allItems = new ArrayList<>();
 
+            // 주차별 연장근로 누계 (ISO 주차 기준)
+            Map<Integer, Double> weeklyOvertimeMap = new HashMap<>();
+
             for (WorkRecord record : records) {
-                WorkTimeResult result = new WorkTimeResult(
-                        record.getRegularMinutes() / 60.0,
-                        record.getOvertimeMinutes() / 60.0,
-                        record.getNightMinutes() / 60.0,
-                        record.getHolidayMinutes() / 60.0,
-                        record.getHolidayOvertimeMinutes() / 60.0
-                );
-                allItems.addAll(wageCalculator.calculate(result, hourlyWage, payroll));
+                allItems.addAll(wageCalculator.calculate(record, hourlyWage, payroll));
+
+                // ── 주 52시간 한도 누계 ───────────────────────────────────────
+                // 근로기준법 제53조 + 2018년 개정: 1주 = 휴일 포함 7일
+                // 연장 한도 사용량 = 평일연장 + 휴일기본 + 휴일연장 (휴일근로 전체 포함)
+                double dailyOvertimeHours = (record.getOvertimeMinutes()
+                        + record.getHolidayMinutes()
+                        + record.getHolidayOvertimeMinutes()) / 60.0;
+                int isoWeek = record.getBizDate().get(WeekFields.ISO.weekOfWeekBasedYear());
+                weeklyOvertimeMap.merge(isoWeek, dailyOvertimeHours, Double::sum);
             }
 
+            // ── 주 52시간 한도 체크 ───────────────────────────────────────────
+            double maxWeeklyOvertime = weeklyOvertimeMap.values().stream()
+                    .mapToDouble(Double::doubleValue)
+                    .max()
+                    .orElse(0.0);
+            boolean overtimeLimitExceeded = maxWeeklyOvertime > WEEKLY_OVERTIME_LIMIT;
+
+            if (overtimeLimitExceeded) {
+                log.warn("주 52시간 한도 초과: memberId={}, {}년 {}월, 최대 주간연장={}h (한도 {}h)",
+                        memberId, ym.getYear(), ym.getMonthValue(),
+                        String.format("%.1f", maxWeeklyOvertime), WEEKLY_OVERTIME_LIMIT);
+                weeklyOvertimeMap.forEach((week, hours) -> {
+                    if (hours > WEEKLY_OVERTIME_LIMIT) {
+                        log.warn("  └ {}주차: 연장 {}h (초과분 {}h)",
+                                week,
+                                String.format("%.1f", hours),
+                                String.format("%.1f", hours - WEEKLY_OVERTIME_LIMIT));
+                    }
+                });
+            }
+
+            payroll.updateOvertimeCheck(overtimeLimitExceeded, maxWeeklyOvertime);
+
+            // ── 총 지급액 ─────────────────────────────────────────────────────
             long total = allItems.stream().mapToLong(PayrollItem::getAmount).sum();
             payroll.updateTotalAmount(total);
-            payroll.setPendingItems(allItems);
 
-            log.debug("급여 계산 완료: memberId={}, {}년 {}월, 근무기록={}건, 총액={}원",
-                    memberId, ym.getYear(), ym.getMonthValue(), records.size(), total);
+            // ── 4대보험 + 세금 공제 ───────────────────────────────────────────
+            long taxableIncome = Math.max(0L, total - nonTaxableMealAllowance);
+
+            InsuranceDeductionResult insurance = insuranceCalculator.calculate(taxableIncome, ym.atDay(1));
+            TaxDeductionResult tax = taxCalculator.calculate(taxableIncome, dependents, ym.atDay(1));
+
+            payroll.updateDeductions(
+                    insurance.nationalPension(),
+                    insurance.healthInsurance(),
+                    insurance.longTermCare(),
+                    insurance.employmentInsurance(),
+                    tax.incomeTax(),
+                    tax.localIncomeTax()
+            );
+
+            payroll.setPendingItems(allItems);
             return payroll;
         };
     }
@@ -195,8 +269,10 @@ public class PayrollStepConfig {
             for (MonthlyPayroll payroll : chunk.getItems()) {
                 monthlyPayrollRepository.save(payroll);
                 payrollItemRepository.saveAll(payroll.getPendingItems());
-                log.info("급여 저장 완료: memberId={}, {}년 {}월, 총액={}원",
-                        payroll.getMemberId(), payroll.getYear(), payroll.getMonth(), payroll.getTotalAmount());
+                log.info("급여 저장 완료: memberId={}, {}년 {}월, 총지급={}원, 총공제={}원, 실수령={}원, 주52h초과={}",
+                        payroll.getMemberId(), payroll.getYear(), payroll.getMonth(),
+                        payroll.getTotalAmount(), payroll.getTotalDeduction(), payroll.getNetPay(),
+                        payroll.isOvertimeLimitExceeded() ? "⚠ 초과" : "정상");
             }
         };
     }
