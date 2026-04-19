@@ -3,7 +3,6 @@ package dev.payroll.service;
 import dev.payroll.constant.PayrollItemType;
 import dev.payroll.entity.MonthlyPayroll;
 import dev.payroll.entity.PayrollItem;
-import dev.workrecord.entity.WorkRecord;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -38,15 +37,28 @@ public class WageCalculator {
         return BigDecimal.valueOf(minutes).divide(SIXTY, 10, RoundingMode.HALF_UP);
     }
 
-    public List<PayrollItem> calculate(WorkRecord record, int hourlyWage, MonthlyPayroll payroll) {
+    /**
+     * 월간 합산된 분(minutes) 단위 데이터를 받아 PayrollItem 목록을 생성합니다.
+     * WorkRecord가 원천 데이터로 별도 존재하므로 일별 계산 결과를 행으로 저장하지 않고,
+     * 월 전체를 타입별로 집계한 값으로 최대 5건만 생성합니다.
+     */
+    public List<PayrollItem> calculate(
+            int totalRegularMinutes,
+            int totalOvertimeMinutes,
+            int totalNightMinutes,
+            int totalHolidayMinutes,
+            int totalHolidayOvertimeMinutes,
+            int hourlyWage,
+            MonthlyPayroll payroll
+    ) {
         List<PayrollItem> items = new ArrayList<>();
         BigDecimal wage = BigDecimal.valueOf(hourlyWage);
 
-        BigDecimal regularHours = minutesToHours(record.getRegularMinutes());
-        BigDecimal overtimeHours = minutesToHours(record.getOvertimeMinutes());
-        BigDecimal nightHours = minutesToHours(record.getNightMinutes());
-        BigDecimal holidayHours = minutesToHours(record.getHolidayMinutes());
-        BigDecimal holidayOvertimeHours = minutesToHours(record.getHolidayOvertimeMinutes());
+        BigDecimal regularHours = minutesToHours(totalRegularMinutes);
+        BigDecimal overtimeHours = minutesToHours(totalOvertimeMinutes);
+        BigDecimal nightHours = minutesToHours(totalNightMinutes);
+        BigDecimal holidayHours = minutesToHours(totalHolidayMinutes);
+        BigDecimal holidayOvertimeHours = minutesToHours(totalHolidayOvertimeMinutes);
 
         if (regularHours.compareTo(BigDecimal.ZERO) > 0) {
             BigDecimal amount = regularHours.multiply(wage).setScale(0, RoundingMode.HALF_UP);
