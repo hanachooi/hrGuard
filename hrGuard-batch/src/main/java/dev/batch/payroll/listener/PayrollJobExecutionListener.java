@@ -2,6 +2,7 @@ package dev.batch.payroll.listener;
 
 import dev.batch.common.exception.BatchErrorCode;
 import dev.batch.common.exception.BatchException;
+import dev.payroll.service.InsuranceCalculator;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
@@ -11,6 +12,8 @@ import org.springframework.batch.core.JobExecutionListener;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.time.LocalDate;
+import java.time.YearMonth;
 
 /**
  * Payroll Job 시작/종료 리스너.
@@ -33,8 +36,10 @@ public class PayrollJobExecutionListener implements JobExecutionListener {
 
     private final Counter jobSuccessCounter;
     private final Counter jobFailureCounter;
+    private final InsuranceCalculator insuranceCalculator;
 
-    public PayrollJobExecutionListener(MeterRegistry meterRegistry) {
+    public PayrollJobExecutionListener(MeterRegistry meterRegistry,
+                                       InsuranceCalculator insuranceCalculator) {
         this.jobSuccessCounter = Counter.builder("payroll.batch.job")
                 .tag("status", "success")
                 .description("Payroll batch job 성공 횟수")
@@ -43,14 +48,20 @@ public class PayrollJobExecutionListener implements JobExecutionListener {
                 .tag("status", "failure")
                 .description("Payroll batch job 실패 횟수")
                 .register(meterRegistry);
+        this.insuranceCalculator = insuranceCalculator;
     }
 
     // ── Job 시작 ────────────────────────────────────────────────────────────
 
     @Override
     public void beforeJob(JobExecution jobExecution) {
+        String yearMonth = jobExecution.getJobParameters().getString("yearMonth");
+        LocalDate payrollDate = YearMonth.parse(yearMonth).atDay(1);
+        insuranceCalculator.load(payrollDate);
+        log.info("4대보험 요율 메모리 적재 완료 (기준일={})", payrollDate);
+
         log.info("===== [payrollJob 시작] yearMonth={}, jobId={} =====",
-                jobExecution.getJobParameters().getString("yearMonth"),
+                yearMonth,
                 jobExecution.getJobId());
     }
 
@@ -58,6 +69,9 @@ public class PayrollJobExecutionListener implements JobExecutionListener {
 
     @Override
     public void afterJob(JobExecution jobExecution) {
+        insuranceCalculator.clear();
+        log.info("4대보험 요율 메모리 해제 완료");
+
         Duration elapsed = Duration.between(
                 jobExecution.getStartTime(), jobExecution.getEndTime());
 

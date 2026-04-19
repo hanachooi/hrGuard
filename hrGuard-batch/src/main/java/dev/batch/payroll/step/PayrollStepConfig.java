@@ -250,7 +250,7 @@ public class PayrollStepConfig {
             BigDecimal taxableIncome = total.subtract(BigDecimal.valueOf(nonTaxableMealAllowance))
                     .max(BigDecimal.ZERO);
 
-            InsuranceDeductionResult insurance = insuranceCalculator.calculate(taxableIncome, ym.atDay(1));
+            InsuranceDeductionResult insurance = insuranceCalculator.calculate(taxableIncome);
             TaxDeductionResult tax = taxCalculator.calculate(taxableIncome, dependents, ym.atDay(1));
 
             payroll.updateDeductions(
