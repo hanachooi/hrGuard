@@ -2,6 +2,7 @@ package dev.batch.payroll.step;
 
 import dev.batch.common.exception.BatchErrorCode;
 import dev.batch.common.exception.BatchException;
+import dev.batch.payroll.dto.PayrollInputDto;
 import dev.batch.payroll.listener.PayrollChunkListener;
 import dev.batch.payroll.listener.PayrollSkipListener;
 import dev.common.configuration.TransactionManagerConfig;
@@ -38,6 +39,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import java.math.BigDecimal;
 import java.time.YearMonth;
 import java.time.temporal.WeekFields;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -72,12 +74,12 @@ public class PayrollStepConfig {
 
     @Bean
     public Step payrollStep(
-            ListItemReader<Long> payrollReader,
-            ItemProcessor<Long, MonthlyPayroll> payrollProcessor,
+            ListItemReader<PayrollInputDto> payrollReader,
+            ItemProcessor<PayrollInputDto, MonthlyPayroll> payrollProcessor,
             ItemWriter<MonthlyPayroll> payrollWriter
     ) {
         return new StepBuilder("payrollStep", jobRepository)
-                .<Long, MonthlyPayroll>chunk(CHUNK_SIZE, domainTransactionManager)
+                .<PayrollInputDto, MonthlyPayroll>chunk(CHUNK_SIZE, domainTransactionManager)
                 .reader(payrollReader)
                 .processor(payrollProcessor)
                 .writer(payrollWriter)
@@ -135,7 +137,7 @@ public class PayrollStepConfig {
 
     @Bean
     @StepScope
-    public ListItemReader<Long> payrollReader(
+    public ListItemReader<PayrollInputDto> payrollReader(
             @Value("#{jobParameters['yearMonth']}") String yearMonth
     ) {
         YearMonth ym = YearMonth.parse(yearMonth);
@@ -143,54 +145,45 @@ public class PayrollStepConfig {
                 ym.atDay(1), ym.atEndOfMonth()
         );
         log.info("급여 계산 대상 인원: {}명 ({})", memberIds.size(), yearMonth);
-        return new ListItemReader<>(memberIds);
+
+        List<PayrollInputDto> inputs = new ArrayList<>();
+        for (Long memberId : memberIds) {
+            WorkSchedule schedule = workScheduleRepository.findByMemberId(memberId).orElse(null);
+            PayrollPolicy policy = schedule != null
+                    ? payrollPolicyRepository.findByMemberId(memberId).orElse(null)
+                    : null;
+            List<WorkRecord> records = schedule != null
+                    ? workRecordRepository.findByMemberIdAndBizDateBetween(memberId, ym.atDay(1), ym.atEndOfMonth())
+                    : List.of();
+            inputs.add(new PayrollInputDto(memberId, schedule, policy, records));
+        }
+
+        return new ListItemReader<>(inputs);
     }
 
-    /**
-     * memberId 1명의 해당 월 WorkRecord를 읽어 MonthlyPayroll을 생성합니다.
-     *
-     * <h3>처리 흐름</h3>
-     * <pre>
-     *   WorkRecord 조회 (이미 분류된 정산용 집계 필드 보유)
-     *     → WageCalculator로 PayrollItem 생성
-     *     → 주차별 연장누계로 주 52시간 한도 체크
-     *     → InsuranceCalculator + TaxCalculator로 공제 계산
-     * </pre>
-     *
-     * <h3>skip 조건</h3>
-     * <ul>
-     *   <li>WorkSchedule 없음 → null 반환 (멤버 전체 skip)</li>
-     * </ul>
-     */
     @Bean
     @StepScope
-    public ItemProcessor<Long, MonthlyPayroll> payrollProcessor(
+    public ItemProcessor<PayrollInputDto, MonthlyPayroll> payrollProcessor(
             @Value("#{jobParameters['yearMonth']}") String yearMonth
     ) {
-        return memberId -> {
+        return input -> {
             YearMonth ym = YearMonth.parse(yearMonth);
 
-            // ── 시급 조회 ─────────────────────────────────────────────────────
-            WorkSchedule schedule = workScheduleRepository.findByMemberId(memberId)
-                    .orElse(null);
-            if (schedule == null) {
+            Long memberId = input.memberId();
+
+            if (input.workSchedule() == null) {
                 log.warn("WorkSchedule 없음, skip: memberId={}", memberId);
                 return null;
             }
-            int hourlyWage = schedule.getHourlyWage();
+            if (input.payrollPolicy() == null) {
+                log.error("PayrollPolicy 미등록, skip: memberId={}", memberId);
+                throw new BatchException(BatchErrorCode.PAYROLL_POLICY_NOT_FOUND);
+            }
 
-            // ── 정산 설정 조회 (부양가족 수, 식대 비과세) ─────────────────────
-            PayrollPolicy payrollPolicy = payrollPolicyRepository.findByMemberId(memberId)
-                    .orElseThrow(() -> {
-                        log.error("PayrollPolicy 미등록, Job 중단: memberId={}", memberId);
-                        return new BatchException(BatchErrorCode.PAYROLL_POLICY_NOT_FOUND);
-                    });
-            int dependents = payrollPolicy.getDependents();
-            long nonTaxableMealAllowance = payrollPolicy.getNonTaxableMealAllowance();
-
-            // ── WorkRecord 조회 (member + biz_date unique, 1일 1건) ───────────
-            List<WorkRecord> records = workRecordRepository
-                    .findByMemberIdAndBizDateBetween(memberId, ym.atDay(1), ym.atEndOfMonth());
+            int hourlyWage = input.workSchedule().getHourlyWage();
+            int dependents = input.payrollPolicy().getDependents();
+            long nonTaxableMealAllowance = input.payrollPolicy().getNonTaxableMealAllowance();
+            List<WorkRecord> records = input.workRecords();
 
             MonthlyPayroll payroll = MonthlyPayroll.builder()
                     .memberId(memberId)
