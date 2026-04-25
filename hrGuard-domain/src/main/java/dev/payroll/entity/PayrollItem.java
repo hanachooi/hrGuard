@@ -1,8 +1,10 @@
 package dev.payroll.entity;
 
+import com.github.f4b6a3.tsid.TsidCreator;
 import dev.payroll.constant.PayrollItemType;
 import jakarta.persistence.*;
 import lombok.*;
+import org.springframework.data.domain.Persistable;
 
 import java.math.BigDecimal;
 
@@ -13,11 +15,26 @@ import java.math.BigDecimal;
 @Builder
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
-public class PayrollItem {
+public class PayrollItem implements Persistable<Long> {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @Builder.Default
+    private Long id = TsidCreator.getTsid().toLong();
+
+    // Builder로 생성된 엔티티는 신규(true), DB에서 로드된 엔티티는 @PostLoad로 false 전환
+    @Transient
+    @Builder.Default
+    private boolean isNew = true;
+
+    @PostLoad
+    void markNotNew() {
+        this.isNew = false;
+    }
+
+    @Override
+    public boolean isNew() {
+        return isNew;
+    }
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "monthly_payroll_id", nullable = false)

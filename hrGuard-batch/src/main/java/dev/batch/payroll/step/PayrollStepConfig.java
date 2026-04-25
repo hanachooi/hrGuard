@@ -289,8 +289,7 @@ public class PayrollStepConfig {
                 monthlyPayrollRepository
                         .findByMemberIdAndYearAndMonth(payroll.getMemberId(), payroll.getYear(), payroll.getMonth())
                         .ifPresent(existing -> {
-                            payrollItemRepository.deleteAll(
-                                    payrollItemRepository.findByMonthlyPayrollId(existing.getId()));
+                            payrollItemRepository.deleteAllByMonthlyPayrollId(existing.getId());
                             monthlyPayrollRepository.delete(existing);
                             monthlyPayrollRepository.flush();
                         });
