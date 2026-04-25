@@ -1,10 +1,15 @@
 package dev.payroll.entity;
 
-import dev.common.BaseEntity;
+import com.github.f4b6a3.tsid.TsidCreator;
 import dev.payroll.constant.PayrollStatus;
 import jakarta.persistence.*;
 import lombok.*;
+import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.domain.Persistable;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -15,12 +20,33 @@ import java.util.List;
 @Builder
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
+@EntityListeners(AuditingEntityListener.class)
 @Table(uniqueConstraints = @UniqueConstraint(columnNames = {"member_id", "year", "month"}))
-public class MonthlyPayroll extends BaseEntity {
+public class MonthlyPayroll implements Persistable<Long> {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @Builder.Default
+    private Long id = TsidCreator.getTsid().toLong();
+
+    // Builder로 생성된 엔티티는 신규(true), DB에서 로드된 엔티티는 @PostLoad로 false 전환
+    @Transient
+    @Builder.Default
+    private boolean isNew = true;
+    @CreatedDate
+    @Column(updatable = false)
+    private LocalDateTime createdAt;
+    @LastModifiedDate
+    private LocalDateTime updatedAt;
+
+    @PostLoad
+    void markNotNew() {
+        this.isNew = false;
+    }
+
+    @Override
+    public boolean isNew() {
+        return isNew;
+    }
 
     @Column(name = "member_id", nullable = false)
     private Long memberId;

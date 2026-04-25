@@ -38,7 +38,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import java.math.BigDecimal;
 import java.time.YearMonth;
 import java.time.temporal.WeekFields;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -199,13 +198,20 @@ public class PayrollStepConfig {
                     .month(ym.getMonthValue())
                     .build();
 
-            List<PayrollItem> allItems = new ArrayList<>();
-
-            // 주차별 연장근로 누계 (ISO 주차 기준)
+            // 주차별 연장근로 누계 (ISO 주차 기준) + 월간 분 합산
             Map<Integer, Double> weeklyOvertimeMap = new HashMap<>();
+            int totalRegularMinutes = 0;
+            int totalOvertimeMinutes = 0;
+            int totalNightMinutes = 0;
+            int totalHolidayMinutes = 0;
+            int totalHolidayOvertimeMinutes = 0;
 
             for (WorkRecord record : records) {
-                allItems.addAll(wageCalculator.calculate(record, hourlyWage, payroll));
+                totalRegularMinutes += record.getRegularMinutes();
+                totalOvertimeMinutes += record.getOvertimeMinutes();
+                totalNightMinutes += record.getNightMinutes();
+                totalHolidayMinutes += record.getHolidayMinutes();
+                totalHolidayOvertimeMinutes += record.getHolidayOvertimeMinutes();
 
                 // ── 주 52시간 한도 누계 ───────────────────────────────────────
                 // 근로기준법 제53조 + 2018년 개정: 1주 = 휴일 포함 7일
@@ -216,6 +222,14 @@ public class PayrollStepConfig {
                 int isoWeek = record.getBizDate().get(WeekFields.ISO.weekOfWeekBasedYear());
                 weeklyOvertimeMap.merge(isoWeek, dailyOvertimeHours, Double::sum);
             }
+
+            // WorkRecord가 원천 데이터로 존재하므로 일별 중간 결과를 행으로 저장하지 않고
+            // 월 전체 합산값으로 타입별 PayrollItem을 최대 5건만 생성
+            List<PayrollItem> allItems = wageCalculator.calculate(
+                    totalRegularMinutes, totalOvertimeMinutes, totalNightMinutes,
+                    totalHolidayMinutes, totalHolidayOvertimeMinutes,
+                    hourlyWage, payroll
+            );
 
             // ── 주 52시간 한도 체크 ───────────────────────────────────────────
             double maxWeeklyOvertime = weeklyOvertimeMap.values().stream()
@@ -250,7 +264,7 @@ public class PayrollStepConfig {
             BigDecimal taxableIncome = total.subtract(BigDecimal.valueOf(nonTaxableMealAllowance))
                     .max(BigDecimal.ZERO);
 
-            InsuranceDeductionResult insurance = insuranceCalculator.calculate(taxableIncome, ym.atDay(1));
+            InsuranceDeductionResult insurance = insuranceCalculator.calculate(taxableIncome);
             TaxDeductionResult tax = taxCalculator.calculate(taxableIncome, dependents, ym.atDay(1));
 
             payroll.updateDeductions(
@@ -275,8 +289,7 @@ public class PayrollStepConfig {
                 monthlyPayrollRepository
                         .findByMemberIdAndYearAndMonth(payroll.getMemberId(), payroll.getYear(), payroll.getMonth())
                         .ifPresent(existing -> {
-                            payrollItemRepository.deleteAll(
-                                    payrollItemRepository.findByMonthlyPayrollId(existing.getId()));
+                            payrollItemRepository.deleteAllByMonthlyPayrollId(existing.getId());
                             monthlyPayrollRepository.delete(existing);
                             monthlyPayrollRepository.flush();
                         });

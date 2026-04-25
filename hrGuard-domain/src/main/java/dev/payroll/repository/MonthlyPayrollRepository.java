@@ -10,4 +10,5 @@ import java.util.Optional;
 public interface MonthlyPayrollRepository extends JpaRepository<MonthlyPayroll, Long> {
 
     Optional<MonthlyPayroll> findByMemberIdAndYearAndMonth(Long memberId, int year, int month);
+
 }
