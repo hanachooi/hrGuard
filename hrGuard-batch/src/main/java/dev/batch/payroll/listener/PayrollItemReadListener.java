@@ -1,18 +1,13 @@
 package dev.batch.payroll.listener;
 
+import dev.batch.payroll.dto.PayrollInputDto;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.ItemReadListener;
 import org.springframework.stereotype.Component;
 
-/**
- * Payroll Read 단계 리스너.
- *
- * <p>Reader가 급여 계산 대상 memberId를 읽는 시점에 호출됩니다.
- * 읽기 오류 발생 시 원인을 기록합니다.</p>
- */
 @Slf4j
 @Component
-public class PayrollItemReadListener implements ItemReadListener<Long> {
+public class PayrollItemReadListener implements ItemReadListener<PayrollInputDto> {
 
     @Override
     public void beforeRead() {
@@ -20,8 +15,8 @@ public class PayrollItemReadListener implements ItemReadListener<Long> {
     }
 
     @Override
-    public void afterRead(Long memberId) {
-        log.debug("[Payroll][READ] memberId={} 읽기 완료", memberId);
+    public void afterRead(PayrollInputDto input) {
+        log.debug("[Payroll][READ] memberId={} 읽기 완료", input.memberId());
     }
 
     @Override

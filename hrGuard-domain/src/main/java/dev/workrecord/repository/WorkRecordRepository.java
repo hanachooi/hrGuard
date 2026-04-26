@@ -1,6 +1,7 @@
 package dev.workrecord.repository;
 
 import dev.workrecord.entity.WorkRecord;
+import dev.workrecord.repository.projection.WorkRecordProjection;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -26,6 +27,16 @@ public interface WorkRecordRepository extends JpaRepository<WorkRecord, Long> {
 
     // 급여 배치 Processor: 특정 직원의 해당 월 근무 기록 전체 조회
     List<WorkRecord> findByMemberIdAndBizDateBetween(Long memberId, LocalDate startDate, LocalDate endDate);
+
+    // 급여 배치 Reader: 영속성 우회용 projection 조회 (정산 계산에 필요한 필드만)
+    @Query("SELECT new dev.workrecord.repository.projection.WorkRecordProjection(" +
+            "w.bizDate, w.regularMinutes, w.overtimeMinutes, w.nightMinutes, w.holidayMinutes, w.holidayOvertimeMinutes" +
+            ") FROM WorkRecord w " +
+            "WHERE w.memberId = :memberId AND w.bizDate BETWEEN :startDate AND :endDate")
+    List<WorkRecordProjection> findProjectionByMemberIdAndBizDateBetween(
+            @Param("memberId") Long memberId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
 
     // 급여 배치 Reader: 해당 월에 근무 기록이 있는 memberId 목록
     @Query("SELECT DISTINCT w.memberId FROM WorkRecord w WHERE w.bizDate BETWEEN :startDate AND :endDate")

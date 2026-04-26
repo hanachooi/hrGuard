@@ -27,10 +27,6 @@ import java.time.LocalDateTime;
 )
 public class Commute extends BaseEntity {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
     // FK 없이 memberId만 저장 → DB 계층 부하 제거 (토큰으로 이미 검증된 값)
     @Column(name = "member_id", nullable = false)
     private Long memberId;

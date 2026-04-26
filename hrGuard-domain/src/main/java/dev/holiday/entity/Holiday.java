@@ -1,7 +1,10 @@
 package dev.holiday.entity;
 
 import dev.common.BaseEntity;
-import jakarta.persistence.*;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.*;
 
 import java.time.LocalDate;
@@ -14,10 +17,6 @@ import java.time.LocalDate;
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Table(uniqueConstraints = @UniqueConstraint(columnNames = {"date"}))
 public class Holiday extends BaseEntity {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
 
     @Column(nullable = false)
     private LocalDate date;

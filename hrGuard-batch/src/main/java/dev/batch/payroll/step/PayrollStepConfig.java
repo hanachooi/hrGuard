@@ -2,6 +2,7 @@ package dev.batch.payroll.step;
 
 import dev.batch.common.exception.BatchErrorCode;
 import dev.batch.common.exception.BatchException;
+import dev.batch.payroll.dto.PayrollInputDto;
 import dev.batch.payroll.listener.PayrollChunkListener;
 import dev.batch.payroll.listener.PayrollSkipListener;
 import dev.common.configuration.TransactionManagerConfig;
@@ -10,12 +11,12 @@ import dev.payroll.entity.PayrollItem;
 import dev.payroll.repository.MonthlyPayrollRepository;
 import dev.payroll.repository.PayrollItemRepository;
 import dev.payroll.service.*;
-import dev.payrollpolicy.entity.PayrollPolicy;
 import dev.payrollpolicy.repository.PayrollPolicyRepository;
-import dev.workrecord.entity.WorkRecord;
+import dev.payrollpolicy.repository.projection.PayrollPolicyProjection;
 import dev.workrecord.repository.WorkRecordRepository;
-import dev.workschedule.entity.WorkSchedule;
+import dev.workrecord.repository.projection.WorkRecordProjection;
 import dev.workschedule.repository.WorkScheduleRepository;
+import dev.workschedule.repository.projection.WorkScheduleProjection;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.ExitStatus;
@@ -38,6 +39,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import java.math.BigDecimal;
 import java.time.YearMonth;
 import java.time.temporal.WeekFields;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -72,12 +74,12 @@ public class PayrollStepConfig {
 
     @Bean
     public Step payrollStep(
-            ListItemReader<Long> payrollReader,
-            ItemProcessor<Long, MonthlyPayroll> payrollProcessor,
+            ListItemReader<PayrollInputDto> payrollReader,
+            ItemProcessor<PayrollInputDto, MonthlyPayroll> payrollProcessor,
             ItemWriter<MonthlyPayroll> payrollWriter
     ) {
         return new StepBuilder("payrollStep", jobRepository)
-                .<Long, MonthlyPayroll>chunk(CHUNK_SIZE, domainTransactionManager)
+                .<PayrollInputDto, MonthlyPayroll>chunk(CHUNK_SIZE, domainTransactionManager)
                 .reader(payrollReader)
                 .processor(payrollProcessor)
                 .writer(payrollWriter)
@@ -135,62 +137,55 @@ public class PayrollStepConfig {
 
     @Bean
     @StepScope
-    public ListItemReader<Long> payrollReader(
+    public ListItemReader<PayrollInputDto> payrollReader(
             @Value("#{jobParameters['yearMonth']}") String yearMonth
     ) {
         YearMonth ym = YearMonth.parse(yearMonth);
-        List<Long> memberIds = workRecordRepository.findDistinctMemberIdsByBizDateBetween(
-                ym.atDay(1), ym.atEndOfMonth()
-        );
+        java.time.LocalDate from = ym.atDay(1);
+        java.time.LocalDate to = ym.atEndOfMonth();
+
+        List<Long> memberIds = workRecordRepository.findDistinctMemberIdsByBizDateBetween(from, to);
         log.info("급여 계산 대상 인원: {}명 ({})", memberIds.size(), yearMonth);
-        return new ListItemReader<>(memberIds);
+
+        // projection 조회: 결과는 DTO이며 PC가 관리하지 않음 → dirty check 대상 0건
+        List<PayrollInputDto> inputs = new ArrayList<>();
+        for (Long memberId : memberIds) {
+            WorkScheduleProjection schedule = workScheduleRepository.findProjectionByMemberId(memberId).orElse(null);
+            PayrollPolicyProjection policy = schedule != null
+                    ? payrollPolicyRepository.findProjectionByMemberId(memberId).orElse(null)
+                    : null;
+            List<WorkRecordProjection> records = schedule != null
+                    ? workRecordRepository.findProjectionByMemberIdAndBizDateBetween(memberId, from, to)
+                    : List.of();
+            inputs.add(new PayrollInputDto(memberId, schedule, policy, records));
+        }
+
+        return new ListItemReader<>(inputs);
     }
 
-    /**
-     * memberId 1명의 해당 월 WorkRecord를 읽어 MonthlyPayroll을 생성합니다.
-     *
-     * <h3>처리 흐름</h3>
-     * <pre>
-     *   WorkRecord 조회 (이미 분류된 정산용 집계 필드 보유)
-     *     → WageCalculator로 PayrollItem 생성
-     *     → 주차별 연장누계로 주 52시간 한도 체크
-     *     → InsuranceCalculator + TaxCalculator로 공제 계산
-     * </pre>
-     *
-     * <h3>skip 조건</h3>
-     * <ul>
-     *   <li>WorkSchedule 없음 → null 반환 (멤버 전체 skip)</li>
-     * </ul>
-     */
     @Bean
     @StepScope
-    public ItemProcessor<Long, MonthlyPayroll> payrollProcessor(
+    public ItemProcessor<PayrollInputDto, MonthlyPayroll> payrollProcessor(
             @Value("#{jobParameters['yearMonth']}") String yearMonth
     ) {
-        return memberId -> {
+        return input -> {
             YearMonth ym = YearMonth.parse(yearMonth);
 
-            // ── 시급 조회 ─────────────────────────────────────────────────────
-            WorkSchedule schedule = workScheduleRepository.findByMemberId(memberId)
-                    .orElse(null);
-            if (schedule == null) {
+            Long memberId = input.memberId();
+
+            if (input.workSchedule() == null) {
                 log.warn("WorkSchedule 없음, skip: memberId={}", memberId);
                 return null;
             }
-            int hourlyWage = schedule.getHourlyWage();
+            if (input.payrollPolicy() == null) {
+                log.error("PayrollPolicy 미등록, skip: memberId={}", memberId);
+                throw new BatchException(BatchErrorCode.PAYROLL_POLICY_NOT_FOUND);
+            }
 
-            // ── 정산 설정 조회 (부양가족 수, 식대 비과세) ─────────────────────
-            PayrollPolicy payrollPolicy = payrollPolicyRepository.findByMemberId(memberId)
-                    .orElseThrow(() -> {
-                        log.error("PayrollPolicy 미등록, Job 중단: memberId={}", memberId);
-                        return new BatchException(BatchErrorCode.PAYROLL_POLICY_NOT_FOUND);
-                    });
-            int dependents = payrollPolicy.getDependents();
-            long nonTaxableMealAllowance = payrollPolicy.getNonTaxableMealAllowance();
-
-            // ── WorkRecord 조회 (member + biz_date unique, 1일 1건) ───────────
-            List<WorkRecord> records = workRecordRepository
-                    .findByMemberIdAndBizDateBetween(memberId, ym.atDay(1), ym.atEndOfMonth());
+            int hourlyWage = input.workSchedule().hourlyWage();
+            int dependents = input.payrollPolicy().dependents();
+            long nonTaxableMealAllowance = input.payrollPolicy().nonTaxableMealAllowance();
+            List<WorkRecordProjection> records = input.workRecords();
 
             MonthlyPayroll payroll = MonthlyPayroll.builder()
                     .memberId(memberId)
@@ -206,20 +201,20 @@ public class PayrollStepConfig {
             int totalHolidayMinutes = 0;
             int totalHolidayOvertimeMinutes = 0;
 
-            for (WorkRecord record : records) {
-                totalRegularMinutes += record.getRegularMinutes();
-                totalOvertimeMinutes += record.getOvertimeMinutes();
-                totalNightMinutes += record.getNightMinutes();
-                totalHolidayMinutes += record.getHolidayMinutes();
-                totalHolidayOvertimeMinutes += record.getHolidayOvertimeMinutes();
+            for (WorkRecordProjection record : records) {
+                totalRegularMinutes += record.regularMinutes();
+                totalOvertimeMinutes += record.overtimeMinutes();
+                totalNightMinutes += record.nightMinutes();
+                totalHolidayMinutes += record.holidayMinutes();
+                totalHolidayOvertimeMinutes += record.holidayOvertimeMinutes();
 
                 // ── 주 52시간 한도 누계 ───────────────────────────────────────
                 // 근로기준법 제53조 + 2018년 개정: 1주 = 휴일 포함 7일
                 // 연장 한도 사용량 = 평일연장 + 휴일기본 + 휴일연장 (휴일근로 전체 포함)
-                double dailyOvertimeHours = (record.getOvertimeMinutes()
-                        + record.getHolidayMinutes()
-                        + record.getHolidayOvertimeMinutes()) / 60.0;
-                int isoWeek = record.getBizDate().get(WeekFields.ISO.weekOfWeekBasedYear());
+                double dailyOvertimeHours = (record.overtimeMinutes()
+                        + record.holidayMinutes()
+                        + record.holidayOvertimeMinutes()) / 60.0;
+                int isoWeek = record.bizDate().get(WeekFields.ISO.weekOfWeekBasedYear());
                 weeklyOvertimeMap.merge(isoWeek, dailyOvertimeHours, Double::sum);
             }
 

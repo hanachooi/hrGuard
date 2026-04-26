@@ -3,7 +3,10 @@ package dev.leave.entity;
 import dev.common.BaseEntity;
 import dev.leave.exception.LeaveError;
 import dev.leave.exception.LeaveException;
-import jakarta.persistence.*;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.*;
 
 /**
@@ -27,10 +30,6 @@ import lombok.*;
                 name = "uq_leave_balance_member_year",
                 columnNames = {"member_id", "year"}))
 public class LeaveBalance extends BaseEntity {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
 
     @Column(name = "member_id", nullable = false)
     private Long memberId;
