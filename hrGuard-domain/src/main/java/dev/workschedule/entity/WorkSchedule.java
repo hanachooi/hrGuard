@@ -3,7 +3,10 @@ package dev.workschedule.entity;
 import dev.common.BaseEntity;
 import dev.workschedule.exception.WorkScheduleError;
 import dev.workschedule.exception.WorkScheduleException;
-import jakarta.persistence.*;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.*;
 
 import java.time.DayOfWeek;
@@ -39,10 +42,6 @@ import java.util.stream.Collectors;
 @Table(name = "work_schedule",
         uniqueConstraints = @UniqueConstraint(columnNames = {"member_id"}))
 public class WorkSchedule extends BaseEntity {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
 
     /**
      * 대상 회원 ID (1인 1스케줄)

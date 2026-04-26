@@ -26,10 +26,6 @@ import java.time.LocalDateTime;
         indexes = @Index(name = "idx_leaves_member", columnList = "member_id, start_date_time"))
 public class Leave extends BaseEntity {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
     @Column(name = "member_id", nullable = false)
     private Long memberId;
 

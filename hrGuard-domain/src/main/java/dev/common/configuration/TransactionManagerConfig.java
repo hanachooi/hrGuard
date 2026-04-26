@@ -70,7 +70,8 @@ public class TransactionManagerConfig {
                     "dev.workschedule.repository",
                     "dev.businesstrip.repository",
                     "dev.fieldwork.repository",
-                    "dev.leave.repository"
+                    "dev.leave.repository",
+                    "dev.test"
             },
             entityManagerFactoryRef = DOMAIN_ENTITY_MANAGER_FACTORY,
             transactionManagerRef = DOMAIN_TRANSACTION_MANAGER

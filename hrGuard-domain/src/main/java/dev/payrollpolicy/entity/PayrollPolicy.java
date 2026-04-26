@@ -1,7 +1,10 @@
 package dev.payrollpolicy.entity;
 
 import dev.common.BaseEntity;
-import jakarta.persistence.*;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.*;
 
 /**
@@ -18,10 +21,6 @@ import lombok.*;
 @Table(name = "payroll_policy",
         uniqueConstraints = @UniqueConstraint(columnNames = {"member_id"}))
 public class PayrollPolicy extends BaseEntity {
-
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
 
     @Column(name = "member_id", nullable = false)
     private Long memberId;

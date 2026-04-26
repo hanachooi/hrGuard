@@ -23,10 +23,6 @@ import java.time.LocalDateTime;
 @Table(name = "field_work", indexes = @Index(name = "idx_field_work_member", columnList = "member_id"))
 public class FieldWork extends BaseEntity {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
     @Column(name = "member_id", nullable = false)
     private Long memberId;
 
