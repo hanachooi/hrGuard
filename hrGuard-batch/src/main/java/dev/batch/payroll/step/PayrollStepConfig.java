@@ -11,12 +11,12 @@ import dev.payroll.entity.PayrollItem;
 import dev.payroll.repository.MonthlyPayrollRepository;
 import dev.payroll.repository.PayrollItemRepository;
 import dev.payroll.service.*;
-import dev.payrollpolicy.entity.PayrollPolicy;
 import dev.payrollpolicy.repository.PayrollPolicyRepository;
-import dev.workrecord.entity.WorkRecord;
+import dev.payrollpolicy.repository.projection.PayrollPolicyProjection;
 import dev.workrecord.repository.WorkRecordRepository;
-import dev.workschedule.entity.WorkSchedule;
+import dev.workrecord.repository.projection.WorkRecordProjection;
 import dev.workschedule.repository.WorkScheduleRepository;
+import dev.workschedule.repository.projection.WorkScheduleProjection;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.ExitStatus;
@@ -141,19 +141,21 @@ public class PayrollStepConfig {
             @Value("#{jobParameters['yearMonth']}") String yearMonth
     ) {
         YearMonth ym = YearMonth.parse(yearMonth);
-        List<Long> memberIds = workRecordRepository.findDistinctMemberIdsByBizDateBetween(
-                ym.atDay(1), ym.atEndOfMonth()
-        );
+        java.time.LocalDate from = ym.atDay(1);
+        java.time.LocalDate to = ym.atEndOfMonth();
+
+        List<Long> memberIds = workRecordRepository.findDistinctMemberIdsByBizDateBetween(from, to);
         log.info("급여 계산 대상 인원: {}명 ({})", memberIds.size(), yearMonth);
 
+        // projection 조회: 결과는 DTO이며 PC가 관리하지 않음 → dirty check 대상 0건
         List<PayrollInputDto> inputs = new ArrayList<>();
         for (Long memberId : memberIds) {
-            WorkSchedule schedule = workScheduleRepository.findByMemberId(memberId).orElse(null);
-            PayrollPolicy policy = schedule != null
-                    ? payrollPolicyRepository.findByMemberId(memberId).orElse(null)
+            WorkScheduleProjection schedule = workScheduleRepository.findProjectionByMemberId(memberId).orElse(null);
+            PayrollPolicyProjection policy = schedule != null
+                    ? payrollPolicyRepository.findProjectionByMemberId(memberId).orElse(null)
                     : null;
-            List<WorkRecord> records = schedule != null
-                    ? workRecordRepository.findByMemberIdAndBizDateBetween(memberId, ym.atDay(1), ym.atEndOfMonth())
+            List<WorkRecordProjection> records = schedule != null
+                    ? workRecordRepository.findProjectionByMemberIdAndBizDateBetween(memberId, from, to)
                     : List.of();
             inputs.add(new PayrollInputDto(memberId, schedule, policy, records));
         }
@@ -180,10 +182,10 @@ public class PayrollStepConfig {
                 throw new BatchException(BatchErrorCode.PAYROLL_POLICY_NOT_FOUND);
             }
 
-            int hourlyWage = input.workSchedule().getHourlyWage();
-            int dependents = input.payrollPolicy().getDependents();
-            long nonTaxableMealAllowance = input.payrollPolicy().getNonTaxableMealAllowance();
-            List<WorkRecord> records = input.workRecords();
+            int hourlyWage = input.workSchedule().hourlyWage();
+            int dependents = input.payrollPolicy().dependents();
+            long nonTaxableMealAllowance = input.payrollPolicy().nonTaxableMealAllowance();
+            List<WorkRecordProjection> records = input.workRecords();
 
             MonthlyPayroll payroll = MonthlyPayroll.builder()
                     .memberId(memberId)
@@ -199,20 +201,20 @@ public class PayrollStepConfig {
             int totalHolidayMinutes = 0;
             int totalHolidayOvertimeMinutes = 0;
 
-            for (WorkRecord record : records) {
-                totalRegularMinutes += record.getRegularMinutes();
-                totalOvertimeMinutes += record.getOvertimeMinutes();
-                totalNightMinutes += record.getNightMinutes();
-                totalHolidayMinutes += record.getHolidayMinutes();
-                totalHolidayOvertimeMinutes += record.getHolidayOvertimeMinutes();
+            for (WorkRecordProjection record : records) {
+                totalRegularMinutes += record.regularMinutes();
+                totalOvertimeMinutes += record.overtimeMinutes();
+                totalNightMinutes += record.nightMinutes();
+                totalHolidayMinutes += record.holidayMinutes();
+                totalHolidayOvertimeMinutes += record.holidayOvertimeMinutes();
 
                 // ── 주 52시간 한도 누계 ───────────────────────────────────────
                 // 근로기준법 제53조 + 2018년 개정: 1주 = 휴일 포함 7일
                 // 연장 한도 사용량 = 평일연장 + 휴일기본 + 휴일연장 (휴일근로 전체 포함)
-                double dailyOvertimeHours = (record.getOvertimeMinutes()
-                        + record.getHolidayMinutes()
-                        + record.getHolidayOvertimeMinutes()) / 60.0;
-                int isoWeek = record.getBizDate().get(WeekFields.ISO.weekOfWeekBasedYear());
+                double dailyOvertimeHours = (record.overtimeMinutes()
+                        + record.holidayMinutes()
+                        + record.holidayOvertimeMinutes()) / 60.0;
+                int isoWeek = record.bizDate().get(WeekFields.ISO.weekOfWeekBasedYear());
                 weeklyOvertimeMap.merge(isoWeek, dailyOvertimeHours, Double::sum);
             }
 
