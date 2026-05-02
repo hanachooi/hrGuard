@@ -10,6 +10,8 @@ import org.springframework.batch.core.StepExecutionListener;
 import org.springframework.batch.core.scope.context.ChunkContext;
 import org.springframework.stereotype.Component;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryMXBean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -48,6 +50,13 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
      * Step 실행 단위로 퇴근 미기록 건수를 추적 (Singleton이므로 beforeStep에서 리셋)
      */
     private final AtomicLong commuteSkippedCount = new AtomicLong(0);
+
+    /**
+     * 청크 단위 heap 추적용 — 직전 chunk afterChunk 시점의 heap (MB)
+     * 톱니 패턴 검증: chunk 시작 → heap 증가 → write/commit 후 참조 해제 → GC 시점에 회수
+     */
+    private final AtomicLong prevAfterChunkHeapMb = new AtomicLong(-1);
+    private final MemoryMXBean memoryMxBean = ManagementFactory.getMemoryMXBean();
 
     public PayrollChunkListener(MeterRegistry registry) {
         this.chunkSuccessCounter = Counter.builder("payroll.batch.chunks")
@@ -105,11 +114,20 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
 
     /**
      * 청크 처리 시작 전 호출.
-     * 직전 청크까지의 누적 카운터를 DEBUG로 남깁니다.
+     * 직전 청크까지의 누적 카운터를 DEBUG로 남기고, chunk 진입 시점 heap 을 INFO 로 남깁니다.
+     * <p>이 값과 afterChunk 의 heap 값을 비교해 톱니 패턴(누적 → 회수)을 관찰합니다.</p>
      */
     @Override
     public void beforeChunk(ChunkContext context) {
         StepExecution se = context.getStepContext().getStepExecution();
+        long heapMb = usedHeapMb();
+        long prev = prevAfterChunkHeapMb.get();
+        long delta = prev < 0 ? 0 : heapMb - prev;
+
+        log.info("[Chunk #{} 시작] heap={}MB (직전 afterChunk 대비 {}{}MB) — DTO 누적 시작",
+                se.getCommitCount() + 1, heapMb,
+                delta >= 0 ? "+" : "", delta);
+
         log.debug("[Chunk 시작] 커밋={}, 읽기={}, 쓰기={}, 필터={}, 롤백={}",
                 se.getCommitCount(), se.getReadCount(),
                 se.getWriteCount(), se.getFilterCount(), se.getRollbackCount());
@@ -150,13 +168,25 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
                 ? String.format("%.1f", (double) se.getWriteCount() / total * 100.0)
                 : "0.0";
 
-        log.info("[Chunk #{} 완료] 읽기={} | 저장={} | 필터(skip)={} | 롤백={} | 정산성공률={}%",
+        long heapMb = usedHeapMb();
+        prevAfterChunkHeapMb.set(heapMb);
+
+        log.info("[Chunk #{} 완료] 읽기={} | 저장={} | 필터(skip)={} | 롤백={} | 정산성공률={}% | heap={}MB",
                 se.getCommitCount(),
                 se.getReadCount(),
                 se.getWriteCount(),
                 se.getFilterCount(),
                 se.getRollbackCount(),
-                rate);
+                rate,
+                heapMb);
+
+        // chunk 버퍼(inputs/outputs) 참조 해제 시점 — 다음 chunk 진입 전까지 GC 대상
+        log.info("[Chunk #{}] write/commit 완료 → chunk 버퍼의 PayrollInputDto {}개 + MonthlyPayroll {}개 참조 해제 (GC 대상)",
+                se.getCommitCount(), chunkRead, chunkWritten + chunkFiltered);
+    }
+
+    private long usedHeapMb() {
+        return memoryMxBean.getHeapMemoryUsage().getUsed() / (1024 * 1024);
     }
 
     /**
