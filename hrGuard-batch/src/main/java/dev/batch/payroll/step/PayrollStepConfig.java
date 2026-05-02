@@ -5,6 +5,7 @@ import dev.batch.common.exception.BatchException;
 import dev.batch.payroll.dto.PayrollInputDto;
 import dev.batch.payroll.listener.PayrollChunkListener;
 import dev.batch.payroll.listener.PayrollSkipListener;
+import dev.common.configuration.DataSourceConfig;
 import dev.common.configuration.TransactionManagerConfig;
 import dev.payroll.entity.MonthlyPayroll;
 import dev.payroll.entity.PayrollItem;
@@ -19,16 +20,15 @@ import dev.workschedule.repository.WorkScheduleRepository;
 import dev.workschedule.repository.projection.WorkScheduleProjection;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.batch.core.ExitStatus;
-import org.springframework.batch.core.Step;
-import org.springframework.batch.core.StepExecution;
-import org.springframework.batch.core.StepExecutionListener;
+import org.springframework.batch.core.*;
 import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.builder.StepBuilder;
-import org.springframework.batch.item.ItemProcessor;
-import org.springframework.batch.item.ItemWriter;
-import org.springframework.batch.item.support.ListItemReader;
+import org.springframework.batch.item.*;
+import org.springframework.batch.item.database.JdbcPagingItemReader;
+import org.springframework.batch.item.database.Order;
+import org.springframework.batch.item.database.builder.JdbcPagingItemReaderBuilder;
+import org.springframework.batch.item.database.support.MySqlPagingQueryProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -36,13 +36,16 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import javax.sql.DataSource;
+import java.lang.management.ManagementFactory;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.temporal.WeekFields;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 @Configuration
@@ -71,10 +74,12 @@ public class PayrollStepConfig {
     private final PayrollSkipListener payrollSkipListener;
     @Qualifier(TransactionManagerConfig.DOMAIN_TRANSACTION_MANAGER)
     private final PlatformTransactionManager domainTransactionManager;
+    @Qualifier(DataSourceConfig.DOMAIN_DATASOURCE)
+    private final DataSource domainDataSource;
 
     @Bean
     public Step payrollStep(
-            ListItemReader<PayrollInputDto> payrollReader,
+            ItemStreamReader<PayrollInputDto> payrollReader,
             ItemProcessor<PayrollInputDto, MonthlyPayroll> payrollProcessor,
             ItemWriter<MonthlyPayroll> payrollWriter
     ) {
@@ -83,7 +88,8 @@ public class PayrollStepConfig {
                 .reader(payrollReader)
                 .processor(payrollProcessor)
                 .writer(payrollWriter)
-                .listener((Object) payrollChunkListener)
+                .listener((ChunkListener) payrollChunkListener)
+                .listener((StepExecutionListener) payrollChunkListener)
                 .listener(payrollStepListener())
                 .faultTolerant()
                 .skip(BatchException.class)
@@ -135,32 +141,95 @@ public class PayrollStepConfig {
         };
     }
 
+    /**
+     * memberId 페이징 + 멤버별 부가 조회까지 Reader 내부에서 모두 처리.
+     * - 내부 delegate(JdbcPagingItemReader<Long>)가 Keyset 페이지 단위로 memberId 를 흘려보냄
+     * → 한 페이지(=PAGE_SIZE 건) memberId 만 메모리에 적재
+     * - read() 호출 시 memberId 1건당 schedule/policy/records 부가 조회 후 PayrollInputDto 반환
+     * → 직전 read() 결과는 chunk 가 누적되며 참조 유지, chunk 커밋 시 일괄 GC 대상
+     * - ItemStreamReader 로 구현해 내부 delegate 의 open/update/close 를 Step 생명주기에 위임
+     */
     @Bean
     @StepScope
-    public ListItemReader<PayrollInputDto> payrollReader(
+    public ItemStreamReader<PayrollInputDto> payrollReader(
             @Value("#{jobParameters['yearMonth']}") String yearMonth
-    ) {
+    ) throws Exception {
         YearMonth ym = YearMonth.parse(yearMonth);
-        java.time.LocalDate from = ym.atDay(1);
-        java.time.LocalDate to = ym.atEndOfMonth();
+        LocalDate from = ym.atDay(1);
+        LocalDate to = ym.atEndOfMonth();
 
-        List<Long> memberIds = workRecordRepository.findDistinctMemberIdsByBizDateBetween(from, to);
-        log.info("급여 계산 대상 인원: {}명 ({})", memberIds.size(), yearMonth);
+        MySqlPagingQueryProvider queryProvider = new MySqlPagingQueryProvider();
+        queryProvider.setSelectClause("DISTINCT member_id");
+        queryProvider.setFromClause("FROM work_record");
+        queryProvider.setWhereClause("biz_date BETWEEN :from AND :to");
+        queryProvider.setSortKeys(Map.of("member_id", Order.ASCENDING));
 
-        // projection 조회: 결과는 DTO이며 PC가 관리하지 않음 → dirty check 대상 0건
-        List<PayrollInputDto> inputs = new ArrayList<>();
-        for (Long memberId : memberIds) {
-            WorkScheduleProjection schedule = workScheduleRepository.findProjectionByMemberId(memberId).orElse(null);
-            PayrollPolicyProjection policy = schedule != null
-                    ? payrollPolicyRepository.findProjectionByMemberId(memberId).orElse(null)
-                    : null;
-            List<WorkRecordProjection> records = schedule != null
-                    ? workRecordRepository.findProjectionByMemberIdAndBizDateBetween(memberId, from, to)
-                    : List.of();
-            inputs.add(new PayrollInputDto(memberId, schedule, policy, records));
-        }
+        JdbcPagingItemReader<Long> delegate = new JdbcPagingItemReaderBuilder<Long>()
+                .name("payrollMemberIdReader")
+                .dataSource(domainDataSource)
+                .queryProvider(queryProvider)
+                .parameterValues(Map.of("from", from, "to", to))
+                .pageSize(CHUNK_SIZE)
+                .rowMapper((rs, n) -> rs.getLong(1))
+                .saveState(false)
+                .build();
+        delegate.afterPropertiesSet();
 
-        return new ListItemReader<>(inputs);
+        log.info("급여 계산 Reader 초기화: yearMonth={}, range=[{}~{}], pageSize={}",
+                yearMonth, from, to, CHUNK_SIZE);
+
+        // chunk 단위 DTO 생성/회수 관찰용 카운터
+        AtomicInteger dtoCreatedTotal = new AtomicInteger();
+        AtomicInteger dtoCreatedInChunk = new AtomicInteger();
+
+        return new ItemStreamReader<>() {
+            @Override
+            public PayrollInputDto read() throws Exception {
+                Long memberId = delegate.read();
+                if (memberId == null) {
+                    log.info("[Reader] 모든 페이지 소진 — 누적 PayrollInputDto 생성 수={}", dtoCreatedTotal.get());
+                    return null;
+                }
+                WorkScheduleProjection schedule = workScheduleRepository
+                        .findProjectionByMemberId(memberId).orElse(null);
+                PayrollPolicyProjection policy = schedule != null
+                        ? payrollPolicyRepository.findProjectionByMemberId(memberId).orElse(null)
+                        : null;
+                List<WorkRecordProjection> records = schedule != null
+                        ? workRecordRepository.findProjectionByMemberIdAndBizDateBetween(memberId, from, to)
+                        : List.of();
+
+                int totalNow = dtoCreatedTotal.incrementAndGet();
+                int inChunk = dtoCreatedInChunk.incrementAndGet();
+                // chunk 경계(=CHUNK_SIZE 도달)에서만 INFO — 그 외에는 DEBUG (대량 처리 시 로그 폭주 방지)
+                if (inChunk == CHUNK_SIZE) {
+                    long heapMb = ManagementFactory.getMemoryMXBean()
+                            .getHeapMemoryUsage().getUsed() / (1024 * 1024);
+                    log.info("[Reader] chunk 누적 완료 — 이번 chunk DTO {}개 생성 (누적={}건) | heap={}MB → 곧 process+write 후 참조 해제",
+                            inChunk, totalNow, heapMb);
+                    dtoCreatedInChunk.set(0);
+                } else {
+                    log.debug("[Reader] memberId={} → PayrollInputDto 생성 (chunk내 {}/{}, 누적={})",
+                            memberId, inChunk, CHUNK_SIZE, totalNow);
+                }
+                return new PayrollInputDto(memberId, schedule, policy, records);
+            }
+
+            @Override
+            public void open(ExecutionContext executionContext) throws ItemStreamException {
+                delegate.open(executionContext);
+            }
+
+            @Override
+            public void update(ExecutionContext executionContext) throws ItemStreamException {
+                delegate.update(executionContext);
+            }
+
+            @Override
+            public void close() throws ItemStreamException {
+                delegate.close();
+            }
+        };
     }
 
     @Bean
@@ -168,9 +237,9 @@ public class PayrollStepConfig {
     public ItemProcessor<PayrollInputDto, MonthlyPayroll> payrollProcessor(
             @Value("#{jobParameters['yearMonth']}") String yearMonth
     ) {
-        return input -> {
-            YearMonth ym = YearMonth.parse(yearMonth);
+        YearMonth ym = YearMonth.parse(yearMonth);
 
+        return input -> {
             Long memberId = input.memberId();
 
             if (input.workSchedule() == null) {
