@@ -12,8 +12,11 @@ import dev.payroll.entity.PayrollItem;
 import dev.payroll.repository.MonthlyPayrollRepository;
 import dev.payroll.repository.PayrollItemRepository;
 import dev.payroll.service.*;
+import dev.payrollpolicy.repository.PayrollPolicyRepository;
 import dev.payrollpolicy.repository.projection.PayrollPolicyProjection;
+import dev.workrecord.repository.WorkRecordRepository;
 import dev.workrecord.repository.projection.WorkRecordProjection;
+import dev.workschedule.repository.WorkScheduleRepository;
 import dev.workschedule.repository.projection.WorkScheduleProjection;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,8 +27,10 @@ import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.batch.item.*;
-import org.springframework.batch.item.database.JdbcCursorItemReader;
-import org.springframework.batch.item.database.builder.JdbcCursorItemReaderBuilder;
+import org.springframework.batch.item.database.JdbcPagingItemReader;
+import org.springframework.batch.item.database.Order;
+import org.springframework.batch.item.database.builder.JdbcPagingItemReaderBuilder;
+import org.springframework.batch.item.database.support.MySqlPagingQueryProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -44,6 +49,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Configuration
@@ -62,8 +69,11 @@ public class PayrollStepConfig {
     private static final double WEEKLY_OVERTIME_LIMIT = 12.0;
 
     private final JobRepository jobRepository;
+    private final WorkRecordRepository workRecordRepository;
     private final MonthlyPayrollRepository monthlyPayrollRepository;
     private final PayrollItemRepository payrollItemRepository;
+    private final WorkScheduleRepository workScheduleRepository;
+    private final PayrollPolicyRepository payrollPolicyRepository;
     private final WageCalculator wageCalculator;
     private final InsuranceCalculator insuranceCalculator;
     private final TaxCalculator taxCalculator;
@@ -87,7 +97,6 @@ public class PayrollStepConfig {
                 .writer(payrollWriter)
                 .listener((ChunkListener) payrollChunkListener)
                 .listener((StepExecutionListener) payrollChunkListener)
-                .listener((ItemReadListener<PayrollInputDto>) payrollChunkListener)
                 .listener(payrollStepListener())
                 .faultTolerant()
                 .skip(BatchException.class)
@@ -140,11 +149,12 @@ public class PayrollStepConfig {
     }
 
     /**
-     * cursor 기반 JOIN 1쿼리 + member_id 경계 그루핑 reader.
-     * - work_record ⟕ work_schedule ⟕ payroll_policy JOIN 결과를 ORDER BY member_id, biz_date 로 스트리밍
-     * - peeked 필드로 경계 행을 버퍼링해 다음 read() 에서 재사용 (peek 없이 동일 효과)
-     * - 서버사이드 커서: JDBC URL 의 useCursorFetch=true + 양수 fetchSize 두 조건 모두 필요
-     *   (fetchSize=Integer.MIN_VALUE 스트리밍 hack 은 1행씩 push 라 네트워크 RTT 누적으로 느림)
+     * memberId 페이징 + chunk 단위 IN절 bulk 조회.
+     * - delegate(JdbcPagingItemReader<Long>)가 Keyset 기반으로 memberId 를 페이지 단위 제공
+     * - fillBuffer(): CHUNK_SIZE 개 memberId 를 한 번에 수집한 뒤 3개 IN절 쿼리로 schedule/policy/records 일괄 조회
+     *   → chunk 당 3쿼리 (멤버별 단건 조회 대비 CHUNK_SIZE × 3 쿼리 절약)
+     * - read(): buffer 에서 PayrollInputDto 를 순서대로 반환, 소진 시 다음 fillBuffer() 호출
+     * - ItemStreamReader 로 구현해 delegate 의 open/update/close 를 Step 생명주기에 위임
      */
     @Bean
     @StepScope
@@ -155,132 +165,105 @@ public class PayrollStepConfig {
         LocalDate from = ym.atDay(1);
         LocalDate to = ym.atEndOfMonth();
 
-        String sql = """
-                SELECT wr.member_id,
-                       wr.biz_date,
-                       wr.regular_minutes,
-                       wr.overtime_minutes,
-                       wr.night_minutes,
-                       wr.holiday_minutes,
-                       wr.holiday_overtime_minutes,
-                       ws.hourly_wage,
-                       pp.dependents,
-                       pp.non_taxable_meal_allowance
-                FROM work_record wr
-                LEFT JOIN work_schedule ws ON ws.member_id = wr.member_id
-                LEFT JOIN payroll_policy pp ON pp.member_id = wr.member_id
-                WHERE wr.biz_date BETWEEN ? AND ?
-                ORDER BY wr.member_id ASC, wr.biz_date ASC
-                """;
+        MySqlPagingQueryProvider queryProvider = new MySqlPagingQueryProvider();
+        queryProvider.setSelectClause("DISTINCT member_id");
+        queryProvider.setFromClause("FROM work_record");
+        queryProvider.setWhereClause("biz_date BETWEEN :from AND :to");
+        queryProvider.setSortKeys(Map.of("member_id", Order.ASCENDING));
 
-        JdbcCursorItemReader<PayrollRowResult> cursorReader = new JdbcCursorItemReaderBuilder<PayrollRowResult>()
-                .name("payrollCursorReader")
+        JdbcPagingItemReader<Long> delegate = new JdbcPagingItemReaderBuilder<Long>()
+                .name("payrollMemberIdReader")
                 .dataSource(domainDataSource)
-                .sql(sql)
-                .preparedStatementSetter(ps -> {
-                    ps.setObject(1, from);
-                    ps.setObject(2, to);
-                })
-                .rowMapper((rs, rowNum) -> new PayrollRowResult(
-                        rs.getLong("member_id"),
-                        rs.getObject("biz_date", LocalDate.class),
-                        rs.getInt("regular_minutes"),
-                        rs.getInt("overtime_minutes"),
-                        rs.getInt("night_minutes"),
-                        rs.getInt("holiday_minutes"),
-                        rs.getInt("holiday_overtime_minutes"),
-                        (Integer) rs.getObject("hourly_wage"),
-                        (Integer) rs.getObject("dependents"),
-                        (Long) rs.getObject("non_taxable_meal_allowance")
-                ))
-                // useCursorFetch=true (JDBC URL) + 양수 fetchSize → 진짜 서버사이드 커서
-                // (Integer.MIN_VALUE 스트리밍 hack 아님 — 1행씩 푸시로 인한 네트워크 누적 회피)
-                .fetchSize(CHUNK_SIZE)
+                .queryProvider(queryProvider)
+                .parameterValues(Map.of("from", from, "to", to))
+                .pageSize(CHUNK_SIZE)
+                .rowMapper((rs, n) -> rs.getLong(1))
                 .saveState(false)
                 .build();
-        cursorReader.afterPropertiesSet();
+        delegate.afterPropertiesSet();
 
-        log.info("급여 계산 Reader 초기화 (Cursor+JOIN): yearMonth={}, range=[{}~{}]", yearMonth, from, to);
+        log.info("급여 계산 Reader 초기화: yearMonth={}, range=[{}~{}], pageSize={}",
+                yearMonth, from, to, CHUNK_SIZE);
 
-        AtomicInteger memberCount = new AtomicInteger();
+        AtomicInteger dtoCreatedTotal = new AtomicInteger();
 
         return new ItemStreamReader<>() {
-            private PayrollRowResult peeked = null;
+            private final List<PayrollInputDto> buffer = new ArrayList<>(CHUNK_SIZE);
+            private int bufferIndex = 0;
+
+            @Override
+            public PayrollInputDto read() throws Exception {
+                if (bufferIndex >= buffer.size()) {
+                    if (!fillBuffer()) return null;
+                }
+                dtoCreatedTotal.incrementAndGet();
+                return buffer.get(bufferIndex++);
+            }
+
+            private boolean fillBuffer() throws Exception {
+                buffer.clear();
+                bufferIndex = 0;
+
+                List<Long> memberIds = new ArrayList<>(CHUNK_SIZE);
+                Long id;
+                while (memberIds.size() < CHUNK_SIZE && (id = delegate.read()) != null) {
+                    memberIds.add(id);
+                }
+                if (memberIds.isEmpty()) {
+                    log.info("[Reader] 모든 페이지 소진 — 누적 PayrollInputDto 생성 수={}", dtoCreatedTotal.get());
+                    return false;
+                }
+
+                long queryStart = System.nanoTime();
+
+                Map<Long, WorkScheduleProjection> scheduleMap = workScheduleRepository
+                        .findProjectionByMemberIdIn(memberIds)
+                        .stream()
+                        .collect(Collectors.toMap(WorkScheduleProjection::memberId, Function.identity()));
+
+                Map<Long, PayrollPolicyProjection> policyMap = payrollPolicyRepository
+                        .findProjectionByMemberIdIn(memberIds)
+                        .stream()
+                        .collect(Collectors.toMap(PayrollPolicyProjection::memberId, Function.identity()));
+
+                Map<Long, List<WorkRecordProjection>> recordsMap = workRecordRepository
+                        .findProjectionByMemberIdInAndBizDateBetween(memberIds, from, to)
+                        .stream()
+                        .collect(Collectors.groupingBy(WorkRecordProjection::memberId));
+
+                long queryMs = (System.nanoTime() - queryStart) / 1_000_000;
+                long heapMb = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed() / (1024 * 1024);
+                log.info("[Reader] IN절 조회 완료 — memberIds={}건, schedule={}건, policy={}건, records={}건, 조회={}ms",
+                        memberIds.size(), scheduleMap.size(), policyMap.size(),
+                        recordsMap.values().stream().mapToInt(List::size).sum(), queryMs);
+                heapLog.info("[HEAP] READER_END   total={} heap_mb={}", dtoCreatedTotal.get(), heapMb);
+
+                for (Long memberId : memberIds) {
+                    buffer.add(new PayrollInputDto(
+                            memberId,
+                            scheduleMap.get(memberId),
+                            policyMap.get(memberId),
+                            recordsMap.getOrDefault(memberId, List.of())
+                    ));
+                }
+                return true;
+            }
 
             @Override
             public void open(ExecutionContext executionContext) throws ItemStreamException {
-                cursorReader.open(executionContext);
+                delegate.open(executionContext);
             }
 
             @Override
             public void update(ExecutionContext executionContext) throws ItemStreamException {
-                cursorReader.update(executionContext);
+                delegate.update(executionContext);
             }
 
             @Override
             public void close() throws ItemStreamException {
-                cursorReader.close();
-            }
-
-            @Override
-            public PayrollInputDto read() throws Exception {
-                PayrollRowResult first = (peeked != null) ? peeked : cursorReader.read();
-                peeked = null;
-                if (first == null) {
-                    log.info("[Reader] 커서 소진 — 누적 PayrollInputDto 생성 수={}", memberCount.get());
-                    return null;
-                }
-
-                Long currentMemberId = first.memberId();
-                List<WorkRecordProjection> records = new ArrayList<>();
-                records.add(toProjection(first));
-
-                PayrollRowResult next;
-                while ((next = cursorReader.read()) != null) {
-                    if (next.memberId().equals(currentMemberId)) {
-                        records.add(toProjection(next));
-                    } else {
-                        peeked = next;
-                        break;
-                    }
-                }
-
-                WorkScheduleProjection schedule = first.hourlyWage() != null
-                        ? new WorkScheduleProjection(currentMemberId, first.hourlyWage()) : null;
-                PayrollPolicyProjection policy = (first.dependents() != null && first.nonTaxableMealAllowance() != null)
-                        ? new PayrollPolicyProjection(currentMemberId, first.dependents(), first.nonTaxableMealAllowance()) : null;
-
-                int total = memberCount.incrementAndGet();
-                if (total % CHUNK_SIZE == 0) {
-                    long heapMb = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed() / (1024 * 1024);
-                    heapLog.info("[HEAP] READER_END   total={} heap_mb={}", total, heapMb);
-                }
-
-                return new PayrollInputDto(currentMemberId, schedule, policy, records);
-            }
-
-            private WorkRecordProjection toProjection(PayrollRowResult row) {
-                return new WorkRecordProjection(
-                        row.memberId(), row.bizDate(),
-                        row.regularMinutes(), row.overtimeMinutes(), row.nightMinutes(),
-                        row.holidayMinutes(), row.holidayOvertimeMinutes()
-                );
+                delegate.close();
             }
         };
-    }
-
-    private record PayrollRowResult(
-            Long memberId,
-            LocalDate bizDate,
-            int regularMinutes,
-            int overtimeMinutes,
-            int nightMinutes,
-            int holidayMinutes,
-            int holidayOvertimeMinutes,
-            Integer hourlyWage,
-            Integer dependents,
-            Long nonTaxableMealAllowance
-    ) {
     }
 
     @Bean
