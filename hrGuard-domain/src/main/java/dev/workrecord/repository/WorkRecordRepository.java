@@ -28,13 +28,23 @@ public interface WorkRecordRepository extends JpaRepository<WorkRecord, Long> {
     // 급여 배치 Processor: 특정 직원의 해당 월 근무 기록 전체 조회
     List<WorkRecord> findByMemberIdAndBizDateBetween(Long memberId, LocalDate startDate, LocalDate endDate);
 
-    // 급여 배치 Reader: 영속성 우회용 projection 조회 (정산 계산에 필요한 필드만)
+    // 급여 배치 Reader: 영속성 우회용 projection 조회 (단건)
     @Query("SELECT new dev.workrecord.repository.projection.WorkRecordProjection(" +
-            "w.bizDate, w.regularMinutes, w.overtimeMinutes, w.nightMinutes, w.holidayMinutes, w.holidayOvertimeMinutes" +
+            "w.memberId, w.bizDate, w.regularMinutes, w.overtimeMinutes, w.nightMinutes, w.holidayMinutes, w.holidayOvertimeMinutes" +
             ") FROM WorkRecord w " +
             "WHERE w.memberId = :memberId AND w.bizDate BETWEEN :startDate AND :endDate")
     List<WorkRecordProjection> findProjectionByMemberIdAndBizDateBetween(
             @Param("memberId") Long memberId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+
+    // 급여 배치 Reader: IN절 bulk 조회 (chunk당 1회)
+    @Query("SELECT new dev.workrecord.repository.projection.WorkRecordProjection(" +
+            "w.memberId, w.bizDate, w.regularMinutes, w.overtimeMinutes, w.nightMinutes, w.holidayMinutes, w.holidayOvertimeMinutes" +
+            ") FROM WorkRecord w " +
+            "WHERE w.memberId IN :memberIds AND w.bizDate BETWEEN :startDate AND :endDate")
+    List<WorkRecordProjection> findProjectionByMemberIdInAndBizDateBetween(
+            @Param("memberIds") List<Long> memberIds,
             @Param("startDate") LocalDate startDate,
             @Param("endDate") LocalDate endDate);
 

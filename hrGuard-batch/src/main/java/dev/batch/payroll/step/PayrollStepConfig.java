@@ -20,6 +20,8 @@ import dev.workschedule.repository.WorkScheduleRepository;
 import dev.workschedule.repository.projection.WorkScheduleProjection;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.*;
 import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.repository.JobRepository;
@@ -42,15 +44,20 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.temporal.WeekFields;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Configuration
 @RequiredArgsConstructor
 public class PayrollStepConfig {
+
+    private static final Logger heapLog = LoggerFactory.getLogger("dev.batch.heap");
 
     private static final int CHUNK_SIZE = 100;
     private static final int SKIP_LIMIT = 50;
@@ -142,12 +149,12 @@ public class PayrollStepConfig {
     }
 
     /**
-     * memberId 페이징 + 멤버별 부가 조회까지 Reader 내부에서 모두 처리.
-     * - 내부 delegate(JdbcPagingItemReader<Long>)가 Keyset 페이지 단위로 memberId 를 흘려보냄
-     * → 한 페이지(=PAGE_SIZE 건) memberId 만 메모리에 적재
-     * - read() 호출 시 memberId 1건당 schedule/policy/records 부가 조회 후 PayrollInputDto 반환
-     * → 직전 read() 결과는 chunk 가 누적되며 참조 유지, chunk 커밋 시 일괄 GC 대상
-     * - ItemStreamReader 로 구현해 내부 delegate 의 open/update/close 를 Step 생명주기에 위임
+     * memberId 페이징 + chunk 단위 IN절 bulk 조회.
+     * - delegate(JdbcPagingItemReader<Long>)가 Keyset 기반으로 memberId 를 페이지 단위 제공
+     * - fillBuffer(): CHUNK_SIZE 개 memberId 를 한 번에 수집한 뒤 3개 IN절 쿼리로 schedule/policy/records 일괄 조회
+     *   → chunk 당 3쿼리 (멤버별 단건 조회 대비 CHUNK_SIZE × 3 쿼리 절약)
+     * - read(): buffer 에서 PayrollInputDto 를 순서대로 반환, 소진 시 다음 fillBuffer() 호출
+     * - ItemStreamReader 로 구현해 delegate 의 open/update/close 를 Step 생명주기에 위임
      */
     @Bean
     @StepScope
@@ -178,41 +185,68 @@ public class PayrollStepConfig {
         log.info("급여 계산 Reader 초기화: yearMonth={}, range=[{}~{}], pageSize={}",
                 yearMonth, from, to, CHUNK_SIZE);
 
-        // chunk 단위 DTO 생성/회수 관찰용 카운터
         AtomicInteger dtoCreatedTotal = new AtomicInteger();
-        AtomicInteger dtoCreatedInChunk = new AtomicInteger();
 
         return new ItemStreamReader<>() {
+            private final List<PayrollInputDto> buffer = new ArrayList<>(CHUNK_SIZE);
+            private int bufferIndex = 0;
+
             @Override
             public PayrollInputDto read() throws Exception {
-                Long memberId = delegate.read();
-                if (memberId == null) {
-                    log.info("[Reader] 모든 페이지 소진 — 누적 PayrollInputDto 생성 수={}", dtoCreatedTotal.get());
-                    return null;
+                if (bufferIndex >= buffer.size()) {
+                    if (!fillBuffer()) return null;
                 }
-                WorkScheduleProjection schedule = workScheduleRepository
-                        .findProjectionByMemberId(memberId).orElse(null);
-                PayrollPolicyProjection policy = schedule != null
-                        ? payrollPolicyRepository.findProjectionByMemberId(memberId).orElse(null)
-                        : null;
-                List<WorkRecordProjection> records = schedule != null
-                        ? workRecordRepository.findProjectionByMemberIdAndBizDateBetween(memberId, from, to)
-                        : List.of();
+                dtoCreatedTotal.incrementAndGet();
+                return buffer.get(bufferIndex++);
+            }
 
-                int totalNow = dtoCreatedTotal.incrementAndGet();
-                int inChunk = dtoCreatedInChunk.incrementAndGet();
-                // chunk 경계(=CHUNK_SIZE 도달)에서만 INFO — 그 외에는 DEBUG (대량 처리 시 로그 폭주 방지)
-                if (inChunk == CHUNK_SIZE) {
-                    long heapMb = ManagementFactory.getMemoryMXBean()
-                            .getHeapMemoryUsage().getUsed() / (1024 * 1024);
-                    log.info("[Reader] chunk 누적 완료 — 이번 chunk DTO {}개 생성 (누적={}건) | heap={}MB → 곧 process+write 후 참조 해제",
-                            inChunk, totalNow, heapMb);
-                    dtoCreatedInChunk.set(0);
-                } else {
-                    log.debug("[Reader] memberId={} → PayrollInputDto 생성 (chunk내 {}/{}, 누적={})",
-                            memberId, inChunk, CHUNK_SIZE, totalNow);
+            private boolean fillBuffer() throws Exception {
+                buffer.clear();
+                bufferIndex = 0;
+
+                List<Long> memberIds = new ArrayList<>(CHUNK_SIZE);
+                Long id;
+                while (memberIds.size() < CHUNK_SIZE && (id = delegate.read()) != null) {
+                    memberIds.add(id);
                 }
-                return new PayrollInputDto(memberId, schedule, policy, records);
+                if (memberIds.isEmpty()) {
+                    log.info("[Reader] 모든 페이지 소진 — 누적 PayrollInputDto 생성 수={}", dtoCreatedTotal.get());
+                    return false;
+                }
+
+                long queryStart = System.nanoTime();
+
+                Map<Long, WorkScheduleProjection> scheduleMap = workScheduleRepository
+                        .findProjectionByMemberIdIn(memberIds)
+                        .stream()
+                        .collect(Collectors.toMap(WorkScheduleProjection::memberId, Function.identity()));
+
+                Map<Long, PayrollPolicyProjection> policyMap = payrollPolicyRepository
+                        .findProjectionByMemberIdIn(memberIds)
+                        .stream()
+                        .collect(Collectors.toMap(PayrollPolicyProjection::memberId, Function.identity()));
+
+                Map<Long, List<WorkRecordProjection>> recordsMap = workRecordRepository
+                        .findProjectionByMemberIdInAndBizDateBetween(memberIds, from, to)
+                        .stream()
+                        .collect(Collectors.groupingBy(WorkRecordProjection::memberId));
+
+                long queryMs = (System.nanoTime() - queryStart) / 1_000_000;
+                long heapMb = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed() / (1024 * 1024);
+                log.info("[Reader] IN절 조회 완료 — memberIds={}건, schedule={}건, policy={}건, records={}건, 조회={}ms",
+                        memberIds.size(), scheduleMap.size(), policyMap.size(),
+                        recordsMap.values().stream().mapToInt(List::size).sum(), queryMs);
+                heapLog.info("[HEAP] READER_END   total={} heap_mb={}", dtoCreatedTotal.get(), heapMb);
+
+                for (Long memberId : memberIds) {
+                    buffer.add(new PayrollInputDto(
+                            memberId,
+                            scheduleMap.get(memberId),
+                            policyMap.get(memberId),
+                            recordsMap.getOrDefault(memberId, List.of())
+                    ));
+                }
+                return true;
             }
 
             @Override
@@ -348,6 +382,10 @@ public class PayrollStepConfig {
     @Bean
     public ItemWriter<MonthlyPayroll> payrollWriter() {
         return chunk -> {
+            int itemCount = chunk.getItems().size();
+            long beforeMb = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed() / (1024 * 1024);
+            heapLog.info("[HEAP] WRITER_IN    items={} heap_mb={}", itemCount, beforeMb);
+
             for (MonthlyPayroll payroll : chunk.getItems()) {
                 // 동일 (memberId, year, month) 레코드가 이미 존재하면 삭제 후 재삽입 (재실행 멱등성)
                 monthlyPayrollRepository
@@ -365,6 +403,9 @@ public class PayrollStepConfig {
                         payroll.getTotalAmount(), payroll.getTotalDeduction(), payroll.getNetPay(),
                         payroll.isOvertimeLimitExceeded() ? "⚠ 초과" : "정상");
             }
+
+            long afterMb = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed() / (1024 * 1024);
+            heapLog.info("[HEAP] WRITER_OUT   items={} heap_mb={}", itemCount, afterMb);
         };
     }
 }
