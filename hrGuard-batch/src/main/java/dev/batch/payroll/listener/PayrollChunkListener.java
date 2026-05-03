@@ -1,14 +1,12 @@
 package dev.batch.payroll.listener;
 
+import dev.batch.payroll.dto.PayrollInputDto;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.batch.core.ChunkListener;
-import org.springframework.batch.core.ExitStatus;
-import org.springframework.batch.core.StepExecution;
-import org.springframework.batch.core.StepExecutionListener;
+import org.springframework.batch.core.*;
 import org.springframework.batch.core.scope.context.ChunkContext;
 import org.springframework.stereotype.Component;
 
@@ -36,9 +34,16 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 @Slf4j
 @Component
-public class PayrollChunkListener implements ChunkListener, StepExecutionListener {
+public class PayrollChunkListener implements ChunkListener, StepExecutionListener, ItemReadListener<PayrollInputDto> {
 
     private static final Logger heapLog = LoggerFactory.getLogger("dev.batch.heap");
+    private static final Logger readerTimingLog = LoggerFactory.getLogger("dev.batch.reader");
+
+    // ── chunk 단위 reader 시간 누적 ──────────────────────────────────────────
+    // 단일 스레드 chunk step 가정 (병렬이면 ThreadLocal 필요)
+    private long readStartNanos;
+    private long chunkReadNanos;
+    private long chunkReadCalls;
 
     // ── Micrometer Counter 정의 ──────────────────────────────────────────────
     // Counter는 단조 증가(monotonically increasing)만 가능 → Prometheus rate() 함수와 궁합이 좋음
@@ -128,6 +133,10 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
         long prev = prevAfterChunkHeapMb.get();
         long delta = prev < 0 ? 0 : heapMb - prev;
 
+        // chunk 단위 reader 누적 시간 리셋
+        chunkReadNanos = 0L;
+        chunkReadCalls = 0L;
+
         log.info("[Chunk #{} 시작] heap={}MB (직전 afterChunk 대비 {}{}MB) — DTO 누적 시작",
                 se.getCommitCount() + 1, heapMb,
                 delta >= 0 ? "+" : "", delta);
@@ -136,6 +145,24 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
         log.debug("[Chunk 시작] 커밋={}, 읽기={}, 쓰기={}, 필터={}, 롤백={}",
                 se.getCommitCount(), se.getReadCount(),
                 se.getWriteCount(), se.getFilterCount(), se.getRollbackCount());
+    }
+
+    // ── ItemReadListener — chunk 단위 reader 시간 측정 ───────────────────────
+
+    @Override
+    public void beforeRead() {
+        readStartNanos = System.nanoTime();
+    }
+
+    @Override
+    public void afterRead(PayrollInputDto item) {
+        chunkReadNanos += System.nanoTime() - readStartNanos;
+        chunkReadCalls++;
+    }
+
+    @Override
+    public void onReadError(Exception ex) {
+        chunkReadNanos += System.nanoTime() - readStartNanos;
     }
 
     /**
@@ -176,17 +203,27 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
         long heapMb = usedHeapMb();
         prevAfterChunkHeapMb.set(heapMb);
 
+        // chunk 단위 reader 시간 집계
+        long readerMs = chunkReadNanos / 1_000_000;
+        long avgReadUs = chunkReadCalls > 0 ? (chunkReadNanos / chunkReadCalls) / 1_000 : 0;
+
         heapLog.info("[HEAP] CHUNK_AFTER  chunk={} read={} written={} heap_mb={}",
                 se.getCommitCount(), se.getReadCount(), se.getWriteCount(), heapMb);
 
-        log.info("[Chunk #{} 완료] 읽기={} | 저장={} | 필터(skip)={} | 롤백={} | 정산성공률={}% | heap={}MB",
+        readerTimingLog.info("[READER] chunk={} reads={} reader_ms={} avg_read_us={}",
+                se.getCommitCount(), chunkReadCalls, readerMs, avgReadUs);
+
+        log.info("[Chunk #{} 완료] 읽기={} | 저장={} | 필터(skip)={} | 롤백={} | 정산성공률={}% | heap={}MB | reader={}ms({}건, 평균{}μs/건)",
                 se.getCommitCount(),
                 se.getReadCount(),
                 se.getWriteCount(),
                 se.getFilterCount(),
                 se.getRollbackCount(),
                 rate,
-                heapMb);
+                heapMb,
+                readerMs,
+                chunkReadCalls,
+                avgReadUs);
 
         // chunk 버퍼(inputs/outputs) 참조 해제 시점 — 다음 chunk 진입 전까지 GC 대상
         log.info("[Chunk #{}] write/commit 완료 → chunk 버퍼의 PayrollInputDto {}개 + MonthlyPayroll {}개 참조 해제 (GC 대상)",
