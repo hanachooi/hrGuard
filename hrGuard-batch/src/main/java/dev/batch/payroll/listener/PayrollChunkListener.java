@@ -3,6 +3,8 @@ package dev.batch.payroll.listener;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.ChunkListener;
 import org.springframework.batch.core.ExitStatus;
 import org.springframework.batch.core.StepExecution;
@@ -35,6 +37,8 @@ import java.util.concurrent.atomic.AtomicLong;
 @Slf4j
 @Component
 public class PayrollChunkListener implements ChunkListener, StepExecutionListener {
+
+    private static final Logger heapLog = LoggerFactory.getLogger("dev.batch.heap");
 
     // ── Micrometer Counter 정의 ──────────────────────────────────────────────
     // Counter는 단조 증가(monotonically increasing)만 가능 → Prometheus rate() 함수와 궁합이 좋음
@@ -127,6 +131,7 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
         log.info("[Chunk #{} 시작] heap={}MB (직전 afterChunk 대비 {}{}MB) — DTO 누적 시작",
                 se.getCommitCount() + 1, heapMb,
                 delta >= 0 ? "+" : "", delta);
+        heapLog.info("[HEAP] CHUNK_BEFORE chunk={} heap_mb={}", se.getCommitCount() + 1, heapMb);
 
         log.debug("[Chunk 시작] 커밋={}, 읽기={}, 쓰기={}, 필터={}, 롤백={}",
                 se.getCommitCount(), se.getReadCount(),
@@ -170,6 +175,9 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
 
         long heapMb = usedHeapMb();
         prevAfterChunkHeapMb.set(heapMb);
+
+        heapLog.info("[HEAP] CHUNK_AFTER  chunk={} read={} written={} heap_mb={}",
+                se.getCommitCount(), se.getReadCount(), se.getWriteCount(), heapMb);
 
         log.info("[Chunk #{} 완료] 읽기={} | 저장={} | 필터(skip)={} | 롤백={} | 정산성공률={}% | heap={}MB",
                 se.getCommitCount(),
