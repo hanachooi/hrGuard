@@ -26,7 +26,9 @@ import org.springframework.batch.core.*;
 import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.builder.StepBuilder;
-import org.springframework.batch.item.*;
+import org.springframework.batch.item.ItemProcessor;
+import org.springframework.batch.item.ItemReader;
+import org.springframework.batch.item.ItemWriter;
 import org.springframework.batch.item.database.JdbcPagingItemReader;
 import org.springframework.batch.item.database.Order;
 import org.springframework.batch.item.database.builder.JdbcPagingItemReaderBuilder;
@@ -86,7 +88,8 @@ public class PayrollStepConfig {
 
     @Bean
     public Step payrollStep(
-            ItemStreamReader<PayrollInputDto> payrollReader,
+            ItemReader<PayrollInputDto> payrollReader,
+            JdbcPagingItemReader<Long> memberIdReader,
             ItemProcessor<PayrollInputDto, MonthlyPayroll> payrollProcessor,
             ItemWriter<MonthlyPayroll> payrollWriter
     ) {
@@ -95,6 +98,7 @@ public class PayrollStepConfig {
                 .reader(payrollReader)
                 .processor(payrollProcessor)
                 .writer(payrollWriter)
+                .stream(memberIdReader)
                 .listener((ChunkListener) payrollChunkListener)
                 .listener((StepExecutionListener) payrollChunkListener)
                 .listener(payrollStepListener())
@@ -149,18 +153,14 @@ public class PayrollStepConfig {
     }
 
     /**
-     * memberId 페이징 + chunk 단위 IN절 bulk 조회.
-     * - delegate(JdbcPagingItemReader<Long>)가 Keyset 기반으로 memberId 를 페이지 단위 제공
-     * - fillBuffer(): CHUNK_SIZE 개 memberId 를 한 번에 수집한 뒤 3개 IN절 쿼리로 schedule/policy/records 일괄 조회
-     *   → chunk 당 3쿼리 (멤버별 단건 조회 대비 CHUNK_SIZE × 3 쿼리 절약)
-     * - read(): buffer 에서 PayrollInputDto 를 순서대로 반환, 소진 시 다음 fillBuffer() 호출
-     * - ItemStreamReader 로 구현해 delegate 의 open/update/close 를 Step 생명주기에 위임
+     * memberId 만 Keyset 페이지 단위로 흘려보내는 delegate.
+     * Step 의 .stream() 으로 등록되어 open/update/close 라이프사이클을 Spring Batch 가 관리한다.
      */
     @Bean
     @StepScope
-    public ItemStreamReader<PayrollInputDto> payrollReader(
+    public JdbcPagingItemReader<Long> memberIdReader(
             @Value("#{jobParameters['yearMonth']}") String yearMonth
-    ) throws Exception {
+    ) {
         YearMonth ym = YearMonth.parse(yearMonth);
         LocalDate from = ym.atDay(1);
         LocalDate to = ym.atEndOfMonth();
@@ -171,23 +171,41 @@ public class PayrollStepConfig {
         queryProvider.setWhereClause("biz_date BETWEEN :from AND :to");
         queryProvider.setSortKeys(Map.of("member_id", Order.ASCENDING));
 
-        JdbcPagingItemReader<Long> delegate = new JdbcPagingItemReaderBuilder<Long>()
+        return new JdbcPagingItemReaderBuilder<Long>()
                 .name("payrollMemberIdReader")
                 .dataSource(domainDataSource)
                 .queryProvider(queryProvider)
                 .parameterValues(Map.of("from", from, "to", to))
                 .pageSize(CHUNK_SIZE)
                 .rowMapper((rs, n) -> rs.getLong(1))
-                .saveState(false)
+                .saveState(true)
                 .build();
-        delegate.afterPropertiesSet();
+    }
+
+    /**
+     * memberId 페이징 + chunk 단위 IN절 bulk 조회.
+     * - delegate(memberIdReader)가 Keyset 기반으로 memberId 를 페이지 단위 제공
+     * - fillBuffer(): CHUNK_SIZE 개 memberId 를 한 번에 수집한 뒤 3개 IN절 쿼리로 schedule/policy/records 일괄 조회
+     * → chunk 당 3쿼리 (멤버별 단건 조회 대비 CHUNK_SIZE × 3 쿼리 절약)
+     * - read(): buffer 에서 PayrollInputDto 를 순서대로 반환, 소진 시 다음 fillBuffer() 호출
+     * - delegate 의 open/update/close 는 Step .stream() 등록을 통해 Spring Batch 가 호출
+     */
+    @Bean
+    @StepScope
+    public ItemReader<PayrollInputDto> payrollReader(
+            JdbcPagingItemReader<Long> memberIdReader,
+            @Value("#{jobParameters['yearMonth']}") String yearMonth
+    ) {
+        YearMonth ym = YearMonth.parse(yearMonth);
+        LocalDate from = ym.atDay(1);
+        LocalDate to = ym.atEndOfMonth();
 
         log.info("급여 계산 Reader 초기화: yearMonth={}, range=[{}~{}], pageSize={}",
                 yearMonth, from, to, CHUNK_SIZE);
 
         AtomicInteger dtoCreatedTotal = new AtomicInteger();
 
-        return new ItemStreamReader<>() {
+        return new ItemReader<>() {
             private final List<PayrollInputDto> buffer = new ArrayList<>(CHUNK_SIZE);
             private int bufferIndex = 0;
 
@@ -206,7 +224,7 @@ public class PayrollStepConfig {
 
                 List<Long> memberIds = new ArrayList<>(CHUNK_SIZE);
                 Long id;
-                while (memberIds.size() < CHUNK_SIZE && (id = delegate.read()) != null) {
+                while (memberIds.size() < CHUNK_SIZE && (id = memberIdReader.read()) != null) {
                     memberIds.add(id);
                 }
                 if (memberIds.isEmpty()) {
@@ -247,21 +265,6 @@ public class PayrollStepConfig {
                     ));
                 }
                 return true;
-            }
-
-            @Override
-            public void open(ExecutionContext executionContext) throws ItemStreamException {
-                delegate.open(executionContext);
-            }
-
-            @Override
-            public void update(ExecutionContext executionContext) throws ItemStreamException {
-                delegate.update(executionContext);
-            }
-
-            @Override
-            public void close() throws ItemStreamException {
-                delegate.close();
             }
         };
     }
