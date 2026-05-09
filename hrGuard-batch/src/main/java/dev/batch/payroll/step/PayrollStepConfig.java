@@ -8,7 +8,6 @@ import dev.batch.payroll.listener.PayrollSkipListener;
 import dev.common.configuration.DataSourceConfig;
 import dev.common.configuration.TransactionManagerConfig;
 import dev.payroll.entity.MonthlyPayroll;
-import dev.payroll.entity.PayrollItem;
 import dev.payroll.repository.MonthlyPayrollRepository;
 import dev.payroll.repository.PayrollItemRepository;
 import dev.payroll.service.*;
@@ -326,10 +325,10 @@ public class PayrollStepConfig {
 
             // WorkRecord가 원천 데이터로 존재하므로 일별 중간 결과를 행으로 저장하지 않고
             // 월 전체 합산값으로 타입별 PayrollItem을 최대 5건만 생성
-            List<PayrollItem> allItems = wageCalculator.calculate(
+            var allItems = wageCalculator.calculate(
                     totalRegularMinutes, totalOvertimeMinutes, totalNightMinutes,
                     totalHolidayMinutes, totalHolidayOvertimeMinutes,
-                    hourlyWage, payroll
+                    hourlyWage, payroll.getId()
             );
 
             // ── 주 52시간 한도 체크 ───────────────────────────────────────────
@@ -357,7 +356,7 @@ public class PayrollStepConfig {
 
             // ── 총 지급액 ─────────────────────────────────────────────────────
             BigDecimal total = allItems.stream()
-                    .map(PayrollItem::getAmount)
+                    .map(item -> item.amount())
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
             payroll.updateTotalAmount(total.longValue());
 
@@ -391,16 +390,16 @@ public class PayrollStepConfig {
 
             for (MonthlyPayroll payroll : chunk.getItems()) {
                 // 동일 (memberId, year, month) 레코드가 이미 존재하면 삭제 후 재삽입 (재실행 멱등성)
+                // projection으로 id만 조회 → @Modifying DELETE로 PC를 거치지 않아 flush() 불필요
                 monthlyPayrollRepository
-                        .findByMemberIdAndYearAndMonth(payroll.getMemberId(), payroll.getYear(), payroll.getMonth())
+                        .findProjectionByMemberIdAndYearAndMonth(payroll.getMemberId(), payroll.getYear(), payroll.getMonth())
                         .ifPresent(existing -> {
-                            payrollItemRepository.deleteAllByMonthlyPayrollId(existing.getId());
-                            monthlyPayrollRepository.delete(existing);
-                            monthlyPayrollRepository.flush();
+                            payrollItemRepository.deleteAllByMonthlyPayrollId(existing.id());
+                            monthlyPayrollRepository.deleteByPayrollId(existing.id());
                         });
 
-                monthlyPayrollRepository.save(payroll);
-                payrollItemRepository.saveAll(payroll.getPendingItems());
+                monthlyPayrollRepository.batchInsert(List.of(payroll));
+                payrollItemRepository.batchInsert(payroll.getPendingItems());
                 log.info("급여 저장 완료: memberId={}, {}년 {}월, 총지급={}원, 총공제={}원, 실수령={}원, 주52h초과={}",
                         payroll.getMemberId(), payroll.getYear(), payroll.getMonth(),
                         payroll.getTotalAmount(), payroll.getTotalDeduction(), payroll.getNetPay(),

@@ -2,6 +2,7 @@ package dev.payroll.entity;
 
 import com.github.f4b6a3.tsid.TsidCreator;
 import dev.payroll.constant.PayrollStatus;
+import dev.payroll.repository.projection.PayrollItemProjection;
 import jakarta.persistence.*;
 import lombok.*;
 import org.springframework.data.annotation.CreatedDate;
@@ -128,7 +129,7 @@ public class MonthlyPayroll implements Persistable<Long> {
     // DB 컬럼 아님 — 배치 processor → writer 간 items 전달용
     @Builder.Default
     @Transient
-    private List<PayrollItem> pendingItems = new ArrayList<>();
+    private List<PayrollItemProjection> pendingItems = new ArrayList<>();
 
     public void updateTotalAmount(long totalAmount) {
         this.totalAmount = totalAmount;
@@ -158,11 +159,11 @@ public class MonthlyPayroll implements Persistable<Long> {
         this.maxWeeklyOvertimeHours  = maxWeeklyOvertimeHours;
     }
 
-    public List<PayrollItem> getPendingItems() {
+    public List<PayrollItemProjection> getPendingItems() {
         return pendingItems;
     }
 
-    public void setPendingItems(List<PayrollItem> items) {
+    public void setPendingItems(List<PayrollItemProjection> items) {
         this.pendingItems = items;
     }
 }

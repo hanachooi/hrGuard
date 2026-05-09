@@ -8,7 +8,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public interface PayrollItemRepository extends JpaRepository<PayrollItem, Long> {
+public interface PayrollItemRepository extends JpaRepository<PayrollItem, Long>, PayrollItemRepositoryCustom {
 
     @Modifying
     @Query("DELETE FROM PayrollItem p WHERE p.monthlyPayroll.id = :monthlyPayrollId")
