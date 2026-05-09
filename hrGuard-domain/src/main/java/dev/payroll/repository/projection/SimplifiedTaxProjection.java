@@ -1,6 +1,8 @@
 package dev.payroll.repository.projection;
 
 public record SimplifiedTaxProjection(
+        int salaryMin,
+        int salaryMax,
         Integer dep1,
         Integer dep2,
         Integer dep3,
