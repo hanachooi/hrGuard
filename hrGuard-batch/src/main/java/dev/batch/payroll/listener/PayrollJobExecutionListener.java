@@ -3,6 +3,7 @@ package dev.batch.payroll.listener;
 import dev.batch.common.exception.BatchErrorCode;
 import dev.batch.common.exception.BatchException;
 import dev.payroll.service.InsuranceCalculator;
+import dev.payroll.service.TaxCalculator;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
@@ -37,9 +38,11 @@ public class PayrollJobExecutionListener implements JobExecutionListener {
     private final Counter jobSuccessCounter;
     private final Counter jobFailureCounter;
     private final InsuranceCalculator insuranceCalculator;
+    private final TaxCalculator taxCalculator;
 
     public PayrollJobExecutionListener(MeterRegistry meterRegistry,
-                                       InsuranceCalculator insuranceCalculator) {
+                                       InsuranceCalculator insuranceCalculator,
+                                       TaxCalculator taxCalculator) {
         this.jobSuccessCounter = Counter.builder("payroll.batch.job")
                 .tag("status", "success")
                 .description("Payroll batch job 성공 횟수")
@@ -49,6 +52,7 @@ public class PayrollJobExecutionListener implements JobExecutionListener {
                 .description("Payroll batch job 실패 횟수")
                 .register(meterRegistry);
         this.insuranceCalculator = insuranceCalculator;
+        this.taxCalculator = taxCalculator;
     }
 
     // ── Job 시작 ────────────────────────────────────────────────────────────
@@ -59,6 +63,8 @@ public class PayrollJobExecutionListener implements JobExecutionListener {
         LocalDate payrollDate = YearMonth.parse(yearMonth).atDay(1);
         insuranceCalculator.load(payrollDate);
         log.info("4대보험 요율 메모리 적재 완료 (기준일={})", payrollDate);
+        taxCalculator.load(payrollDate);
+        log.info("간이세액표 메모리 적재 완료 (기준일={})", payrollDate);
 
         log.info("===== [payrollJob 시작] yearMonth={}, jobId={} =====",
                 yearMonth,
@@ -71,6 +77,8 @@ public class PayrollJobExecutionListener implements JobExecutionListener {
     public void afterJob(JobExecution jobExecution) {
         insuranceCalculator.clear();
         log.info("4대보험 요율 메모리 해제 완료");
+        taxCalculator.clear();
+        log.info("간이세액표 메모리 해제 완료");
 
         Duration elapsed = Duration.between(
                 jobExecution.getStartTime(), jobExecution.getEndTime());
