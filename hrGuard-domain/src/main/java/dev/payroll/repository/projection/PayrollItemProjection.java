@@ -19,8 +19,4 @@ public record PayrollItemProjection(
     public static PayrollItemProjection of(Long monthlyPayrollId, PayrollItemType itemType, double hours, BigDecimal amount) {
         return new PayrollItemProjection(TsidCreator.getTsid().toLong(), monthlyPayrollId, itemType, hours, amount);
     }
-
-    public PayrollItemProjection withMonthlyPayrollId(Long newMonthlyPayrollId) {
-        return new PayrollItemProjection(id, newMonthlyPayrollId, itemType, hours, amount);
-    }
 }

@@ -10,7 +10,6 @@ import dev.common.configuration.TransactionManagerConfig;
 import dev.payroll.entity.MonthlyPayroll;
 import dev.payroll.repository.MonthlyPayrollRepository;
 import dev.payroll.repository.PayrollItemRepository;
-import dev.payroll.repository.projection.MonthlyPayrollIdMember;
 import dev.payroll.repository.projection.PayrollItemProjection;
 import dev.payroll.service.*;
 import dev.payrollpolicy.repository.PayrollPolicyRepository;
@@ -384,16 +383,14 @@ public class PayrollStepConfig {
     }
 
     /**
-     * Plan B: chunk 단위 UPSERT (parent) + DELETE+INSERT (child).
-     * chunk당 결정론적 3~4쿼리:
-     * 1) SELECT (id, member_id) WHERE year=? AND month=? AND member_id IN (...)   — 기존 id 매핑 조회
-     * 2) DELETE FROM payroll_item WHERE monthly_payroll_id IN (existingIds)        — 자식 일괄 삭제 (existing 있을 때만)
-     * 3) INSERT INTO monthly_payroll ... ON DUPLICATE KEY UPDATE ...               — 부모 bulk UPSERT
-     * 4) INSERT INTO payroll_item ...                                               — 자식 bulk insert
-     *
-     * 핵심: UPSERT 는 충돌 시 DB 의 id 를 그대로 두므로, 자식 FK 정합을 위해
-     *       in-memory parent.id 와 child.monthlyPayrollId 를 기존 id 로 미리 재할당한다.
-     *       → 신규 row 는 pre-allocated TSID, 기존 row 는 DB id 로 정렬된 상태에서 UPSERT 1쿼리.
+     * Plan A: chunk 단위 bulk DELETE + INSERT.
+     * chunk당 결정론적 4~5쿼리 (멤버별 N+1 제거):
+     * 1) SELECT id ... WHERE year=? AND month=? AND member_id IN (...)        — 기존 id 일괄 조회
+     * 2) DELETE FROM payroll_item WHERE monthly_payroll_id IN (...)            — 자식 일괄 삭제 (existing 있을 때만)
+     * 3) DELETE FROM monthly_payroll WHERE id IN (...)                         — 부모 일괄 삭제 (existing 있을 때만)
+     * 4) INSERT INTO monthly_payroll ... (jdbcTemplate.batchUpdate)            — 부모 bulk insert
+     * 5) INSERT INTO payroll_item ... (jdbcTemplate.batchUpdate)               — 자식 bulk insert
+     * year/month 는 jobParameter 로 chunk 내 동일하므로 첫 item 기준으로 추출.
      */
     @Bean
     public ItemWriter<MonthlyPayroll> payrollWriter() {
@@ -416,40 +413,26 @@ public class PayrollStepConfig {
                     .toList();
 
             long tSelectStart = System.nanoTime();
-            Map<Long, Long> existingByMember = monthlyPayrollRepository
-                    .findIdAndMemberIdByYearAndMonthAndMemberIdIn(year, month, memberIds)
-                    .stream()
-                    .collect(Collectors.toMap(MonthlyPayrollIdMember::memberId, MonthlyPayrollIdMember::id));
+            List<Long> existingIds = monthlyPayrollRepository
+                    .findIdsByYearAndMonthAndMemberIdIn(year, month, memberIds);
             long selectMs = (System.nanoTime() - tSelectStart) / 1_000_000;
-
-            List<MonthlyPayroll> payrolls = new ArrayList<>(items);
-            List<Long> existingIds = new ArrayList<>(existingByMember.size());
-            List<PayrollItemProjection> allItems = new ArrayList<>(payrolls.size() * 5);
-
-            for (MonthlyPayroll p : payrolls) {
-                Long existingId = existingByMember.get(p.getMemberId());
-                if (existingId != null) {
-                    p.reassignId(existingId);
-                    existingIds.add(existingId);
-                    for (PayrollItemProjection item : p.getPendingItems()) {
-                        allItems.add(item.withMonthlyPayrollId(existingId));
-                    }
-                } else {
-                    allItems.addAll(p.getPendingItems());
-                }
-            }
 
             long deleteMs = 0;
             if (!existingIds.isEmpty()) {
                 long tDeleteStart = System.nanoTime();
                 payrollItemRepository.deleteByMonthlyPayrollIdIn(existingIds);
+                monthlyPayrollRepository.deleteByIdIn(existingIds);
                 deleteMs = (System.nanoTime() - tDeleteStart) / 1_000_000;
             }
 
-            long tUpsertStart = System.nanoTime();
-            monthlyPayrollRepository.bulkUpsert(payrolls);
-            long upsertMs = (System.nanoTime() - tUpsertStart) / 1_000_000;
+            List<MonthlyPayroll> payrolls = new ArrayList<>(items);
+            long tInsertParentStart = System.nanoTime();
+            monthlyPayrollRepository.batchInsert(payrolls);
+            long insertParentMs = (System.nanoTime() - tInsertParentStart) / 1_000_000;
 
+            List<PayrollItemProjection> allItems = payrolls.stream()
+                    .flatMap(p -> p.getPendingItems().stream())
+                    .toList();
             long insertItemMs = 0;
             if (!allItems.isEmpty()) {
                 long tInsertItemStart = System.nanoTime();
@@ -458,10 +441,10 @@ public class PayrollStepConfig {
             }
 
             long totalMs = (System.nanoTime() - t0) / 1_000_000;
-            log.info("[Writer] chunk={}건 {}년{}월 총={}ms (select={}ms, deleteChild={}ms[existing={}건], upsertPayroll={}ms, insertItem={}ms[items={}건])",
+            log.info("[Writer] chunk={}건 {}년{}월 총={}ms (select={}ms, delete={}ms[existing={}건], insertPayroll={}ms, insertItem={}ms[items={}건])",
                     itemCount, year, month, totalMs,
                     selectMs, deleteMs, existingIds.size(),
-                    upsertMs, insertItemMs, allItems.size());
+                    insertParentMs, insertItemMs, allItems.size());
 
             long afterMb = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed() / (1024 * 1024);
             heapLog.info("[HEAP] WRITER_OUT   items={} heap_mb={}", itemCount, afterMb);

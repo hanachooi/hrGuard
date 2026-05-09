@@ -159,13 +159,6 @@ public class MonthlyPayroll implements Persistable<Long> {
         this.maxWeeklyOvertimeHours  = maxWeeklyOvertimeHours;
     }
 
-    /**
-     * UPSERT 시 기존 row id 로 정합 맞추기 위한 setter (writer 전용).
-     */
-    public void reassignId(Long id) {
-        this.id = id;
-    }
-
     public List<PayrollItemProjection> getPendingItems() {
         return pendingItems;
     }
