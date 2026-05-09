@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -22,8 +23,19 @@ public interface MonthlyPayrollRepository extends JpaRepository<MonthlyPayroll, 
             @Param("year") int year,
             @Param("month") int month);
 
+    @Query("SELECT p.id FROM MonthlyPayroll p " +
+            "WHERE p.year = :year AND p.month = :month AND p.memberId IN :memberIds")
+    List<Long> findIdsByYearAndMonthAndMemberIdIn(
+            @Param("year") int year,
+            @Param("month") int month,
+            @Param("memberIds") List<Long> memberIds);
+
     @Modifying
     @Query("DELETE FROM MonthlyPayroll p WHERE p.id = :id")
     void deleteByPayrollId(@Param("id") Long id);
+
+    @Modifying
+    @Query("DELETE FROM MonthlyPayroll p WHERE p.id IN :ids")
+    void deleteByIdIn(@Param("ids") List<Long> ids);
 
 }
