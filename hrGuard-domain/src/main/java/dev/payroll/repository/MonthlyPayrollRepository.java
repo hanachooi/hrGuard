@@ -1,6 +1,7 @@
 package dev.payroll.repository;
 
 import dev.payroll.entity.MonthlyPayroll;
+import dev.payroll.repository.projection.MonthlyPayrollIdMember;
 import dev.payroll.repository.projection.MonthlyPayrollProjection;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -26,6 +27,14 @@ public interface MonthlyPayrollRepository extends JpaRepository<MonthlyPayroll, 
     @Query("SELECT p.id FROM MonthlyPayroll p " +
             "WHERE p.year = :year AND p.month = :month AND p.memberId IN :memberIds")
     List<Long> findIdsByYearAndMonthAndMemberIdIn(
+            @Param("year") int year,
+            @Param("month") int month,
+            @Param("memberIds") List<Long> memberIds);
+
+    @Query("SELECT new dev.payroll.repository.projection.MonthlyPayrollIdMember(p.id, p.memberId) " +
+            "FROM MonthlyPayroll p " +
+            "WHERE p.year = :year AND p.month = :month AND p.memberId IN :memberIds")
+    List<MonthlyPayrollIdMember> findIdAndMemberIdByYearAndMonthAndMemberIdIn(
             @Param("year") int year,
             @Param("month") int month,
             @Param("memberIds") List<Long> memberIds);

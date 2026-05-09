@@ -23,13 +23,46 @@ public class MonthlyPayrollRepositoryCustomImpl implements MonthlyPayrollReposit
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """;
 
+    private static final String UPSERT_SQL = """
+            INSERT INTO monthly_payroll (
+                id, created_at, updated_at, member_id, `year`, `month`,
+                total_amount, national_pension, health_insurance, long_term_care,
+                employment_insurance, income_tax, local_income_tax,
+                total_deduction, net_pay, overtime_limit_exceeded,
+                max_weekly_overtime_hours, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                updated_at              = VALUES(updated_at),
+                total_amount            = VALUES(total_amount),
+                national_pension        = VALUES(national_pension),
+                health_insurance        = VALUES(health_insurance),
+                long_term_care          = VALUES(long_term_care),
+                employment_insurance    = VALUES(employment_insurance),
+                income_tax              = VALUES(income_tax),
+                local_income_tax        = VALUES(local_income_tax),
+                total_deduction         = VALUES(total_deduction),
+                net_pay                 = VALUES(net_pay),
+                overtime_limit_exceeded = VALUES(overtime_limit_exceeded),
+                max_weekly_overtime_hours = VALUES(max_weekly_overtime_hours),
+                status                  = VALUES(status)
+            """;
+
     private final JdbcTemplate jdbcTemplate;
 
     @Override
     public void batchInsert(List<MonthlyPayroll> payrolls) {
+        runBatch(INSERT_SQL, payrolls);
+    }
+
+    @Override
+    public void bulkUpsert(List<MonthlyPayroll> payrolls) {
+        runBatch(UPSERT_SQL, payrolls);
+    }
+
+    private void runBatch(String sql, List<MonthlyPayroll> payrolls) {
         Timestamp now = Timestamp.valueOf(LocalDateTime.now());
         jdbcTemplate.batchUpdate(
-                INSERT_SQL,
+                sql,
                 payrolls,
                 payrolls.size(),
                 (ps, p) -> {
