@@ -1,8 +1,7 @@
 package dev.payroll.service;
 
 import dev.payroll.constant.PayrollItemType;
-import dev.payroll.entity.MonthlyPayroll;
-import dev.payroll.entity.PayrollItem;
+import dev.payroll.repository.projection.PayrollItemProjection;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -42,16 +41,16 @@ public class WageCalculator {
      * WorkRecord가 원천 데이터로 별도 존재하므로 일별 계산 결과를 행으로 저장하지 않고,
      * 월 전체를 타입별로 집계한 값으로 최대 5건만 생성합니다.
      */
-    public List<PayrollItem> calculate(
+    public List<PayrollItemProjection> calculate(
             int totalRegularMinutes,
             int totalOvertimeMinutes,
             int totalNightMinutes,
             int totalHolidayMinutes,
             int totalHolidayOvertimeMinutes,
             int hourlyWage,
-            MonthlyPayroll payroll
+            Long payrollId
     ) {
-        List<PayrollItem> items = new ArrayList<>();
+        List<PayrollItemProjection> items = new ArrayList<>();
         BigDecimal wage = BigDecimal.valueOf(hourlyWage);
 
         BigDecimal regularHours = minutesToHours(totalRegularMinutes);
@@ -62,29 +61,29 @@ public class WageCalculator {
 
         if (regularHours.compareTo(BigDecimal.ZERO) > 0) {
             BigDecimal amount = regularHours.multiply(wage).setScale(0, RoundingMode.HALF_UP);
-            items.add(PayrollItem.builder().monthlyPayroll(payroll).itemType(PayrollItemType.BASIC_WAGE).hours(regularHours.doubleValue()).amount(amount).build());
+            items.add(PayrollItemProjection.of(payrollId, PayrollItemType.BASIC_WAGE, regularHours.doubleValue(), amount));
         }
 
         if (overtimeHours.compareTo(BigDecimal.ZERO) > 0) {
             // 연장: 기본분(1.0)은 regularHours에 포함됐으므로 가산분(0.5)만 추가
             BigDecimal amount = overtimeHours.multiply(wage).multiply(RATE_OVERTIME).setScale(0, RoundingMode.HALF_UP);
-            items.add(PayrollItem.builder().monthlyPayroll(payroll).itemType(PayrollItemType.OVERTIME).hours(overtimeHours.doubleValue()).amount(amount).build());
+            items.add(PayrollItemProjection.of(payrollId, PayrollItemType.OVERTIME, overtimeHours.doubleValue(), amount));
         }
 
         if (nightHours.compareTo(BigDecimal.ZERO) > 0) {
             // 야간: 다른 수당과 중복 적용되는 가산분(0.5)만
             BigDecimal amount = nightHours.multiply(wage).multiply(RATE_NIGHT).setScale(0, RoundingMode.HALF_UP);
-            items.add(PayrollItem.builder().monthlyPayroll(payroll).itemType(PayrollItemType.NIGHT_WORK).hours(nightHours.doubleValue()).amount(amount).build());
+            items.add(PayrollItemProjection.of(payrollId, PayrollItemType.NIGHT_WORK, nightHours.doubleValue(), amount));
         }
 
         if (holidayHours.compareTo(BigDecimal.ZERO) > 0) {
             BigDecimal amount = holidayHours.multiply(wage).multiply(RATE_HOLIDAY).setScale(0, RoundingMode.HALF_UP);
-            items.add(PayrollItem.builder().monthlyPayroll(payroll).itemType(PayrollItemType.HOLIDAY_WORK).hours(holidayHours.doubleValue()).amount(amount).build());
+            items.add(PayrollItemProjection.of(payrollId, PayrollItemType.HOLIDAY_WORK, holidayHours.doubleValue(), amount));
         }
 
         if (holidayOvertimeHours.compareTo(BigDecimal.ZERO) > 0) {
             BigDecimal amount = holidayOvertimeHours.multiply(wage).multiply(RATE_HOLIDAY_OVERTIME).setScale(0, RoundingMode.HALF_UP);
-            items.add(PayrollItem.builder().monthlyPayroll(payroll).itemType(PayrollItemType.HOLIDAY_OVERTIME).hours(holidayOvertimeHours.doubleValue()).amount(amount).build());
+            items.add(PayrollItemProjection.of(payrollId, PayrollItemType.HOLIDAY_OVERTIME, holidayOvertimeHours.doubleValue(), amount));
         }
 
         return items;
