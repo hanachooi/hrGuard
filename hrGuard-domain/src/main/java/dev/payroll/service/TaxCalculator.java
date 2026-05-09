@@ -38,7 +38,7 @@ public class TaxCalculator {
         // 비과세구간 존재(국세청 간이세액표 기반) → 테이블에 없으면 0원 처리
         BigDecimal incomeTax = simplifiedTaxRepository
                 .findTax(salaryInThousands, payrollDate)
-                .map(t -> BigDecimal.valueOf(t.getTaxByDependents(clampedDependents)))
+                .map(row -> BigDecimal.valueOf(row.getTaxByDependents(clampedDependents)))
                 .orElse(BigDecimal.ZERO);
 
         // 지방소득세: 근로소득세 × 10%, 100원 미만 절사
