@@ -1,7 +1,7 @@
 package dev.batch.payroll.listener;
 
-import dev.batch.common.exception.BatchErrorCode;
 import dev.batch.common.exception.BatchException;
+import dev.batch.common.exception.BatchSystemErrorCode;
 import dev.payroll.service.InsuranceCalculator;
 import dev.payroll.service.TaxCalculator;
 import io.micrometer.core.instrument.Counter;
@@ -125,7 +125,7 @@ public class PayrollJobExecutionListener implements JobExecutionListener {
      * OOM — 힙 부족. 청크 크기 축소 또는 힙 증설 필요
      */
     private void handleOom(OutOfMemoryError oom, JobExecution jobExecution) {
-        BatchException wrapped = new BatchException(BatchErrorCode.OUT_OF_MEMORY, oom);
+        BatchException wrapped = new BatchException(BatchSystemErrorCode.OUT_OF_MEMORY, oom);
         log.error("[{}] {} | yearMonth={} | 조치: -Xmx 증설 또는 chunk-size 축소",
                 wrapped.getCommonError().getCode(),
                 wrapped.getCommonError().getMessage(),
@@ -149,7 +149,7 @@ public class PayrollJobExecutionListener implements JobExecutionListener {
      * DataAccessException 계열 — DB 연결·쿼리 오류
      */
     private void handleDatabaseError(Throwable ex, JobExecution jobExecution) {
-        BatchException wrapped = new BatchException(BatchErrorCode.DATABASE_ERROR, ex);
+        BatchException wrapped = new BatchException(BatchSystemErrorCode.DATABASE_ERROR, ex);
         log.error("[{}] {} | yearMonth={} | cause={}",
                 wrapped.getCommonError().getCode(),
                 wrapped.getCommonError().getMessage(),
@@ -162,7 +162,7 @@ public class PayrollJobExecutionListener implements JobExecutionListener {
      * 그 외 치명적 오류
      */
     private void handleUnexpected(Throwable ex, JobExecution jobExecution) {
-        BatchException wrapped = new BatchException(BatchErrorCode.UNEXPECTED_ERROR, ex);
+        BatchException wrapped = new BatchException(BatchSystemErrorCode.UNEXPECTED_ERROR, ex);
         log.error("[{}] {} | yearMonth={} | cause={}",
                 wrapped.getCommonError().getCode(),
                 wrapped.getCommonError().getMessage(),

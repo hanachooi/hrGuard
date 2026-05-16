@@ -1,7 +1,7 @@
 package dev.batch.payroll.step;
 
-import dev.batch.common.exception.BatchErrorCode;
 import dev.batch.common.exception.BatchException;
+import dev.batch.payroll.exception.PayrollBatchErrorCode;
 import dev.batch.payroll.dto.PayrollInputDto;
 import dev.batch.payroll.listener.PayrollChunkListener;
 import dev.batch.payroll.listener.PayrollSkipListener;
@@ -285,7 +285,7 @@ public class PayrollStepConfig {
             }
             if (input.payrollPolicy() == null) {
                 log.error("PayrollPolicy 미등록, skip: memberId={}", memberId);
-                throw new BatchException(BatchErrorCode.PAYROLL_POLICY_NOT_FOUND);
+                throw new BatchException(PayrollBatchErrorCode.PAYROLL_POLICY_NOT_FOUND);
             }
 
             int hourlyWage = input.workSchedule().hourlyWage();
