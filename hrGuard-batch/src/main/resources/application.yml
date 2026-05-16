@@ -1,0 +1,80 @@
+spring:
+  application:
+    name: hrGuard
+  profiles:
+    active: dev
+
+  datasource:
+    meta:
+      hikari:
+        driver-class-name: com.mysql.cj.jdbc.Driver
+        jdbc-url: jdbc:mysql://${DB_HOST:localhost}:3306/meta?useSSL=false&useUnicode=true&serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true
+        username: ${DB_USERNAME:root}
+        password: ${DB_PASSWORD:1234}
+    domain:
+      hikari:
+        driver-class-name: com.p6spy.engine.spy.P6SpyDriver
+        jdbc-url: jdbc:p6spy:mysql://${DB_HOST:localhost}:3306/${DOMAIN_DB:autohrm}?useSSL=false&useUnicode=true&serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true&useCursorFetch=true
+        username: ${DB_USERNAME:root}
+        password: ${DB_PASSWORD:1234}
+        auto-commit: false
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        show_sql: true
+        format_sql: true
+        use_sql_comments: true
+    open-in-view: false
+
+  batch:
+    jdbc:
+      initialize-schema: always
+    job:
+      enabled: false
+
+batch:
+  payroll:
+    # Skip 한도. 초과 시 SkipLimitExceededException 으로 Job 강제 종료.
+    skip-limit: 100
+    retry:
+      # 일시적 DB 오류(deadlock 등) 재시도 횟수
+      limit: 3
+      # Exponential backoff: initial → initial × multiplier 씩 증가, max 까지 상한
+      backoff:
+        initial-ms: 1000
+        multiplier: 2.0
+        max-ms: 30000
+
+holiday:
+  api:
+    service-key: ${HOLIDAY_API_KEY:}
+
+logging:
+  level:
+    root: INFO
+    dev:
+      batch: INFO
+    org:
+      hibernate:
+        type:
+          descriptor.sql: trace
+    p6spy: DEBUG
+    com:
+      amazonaws:
+        util:
+          EC2MetadataUtils: error
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}

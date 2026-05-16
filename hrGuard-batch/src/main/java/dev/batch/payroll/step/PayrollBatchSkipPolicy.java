@@ -6,6 +6,7 @@ import dev.batch.common.exception.BatchSystemErrorCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.step.skip.SkipLimitExceededException;
 import org.springframework.batch.core.step.skip.SkipPolicy;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
@@ -25,7 +26,12 @@ import org.springframework.stereotype.Component;
 @Component
 public class PayrollBatchSkipPolicy implements SkipPolicy {
 
-    static final int SKIP_LIMIT = 100;
+    private final int skipLimit;
+
+    public PayrollBatchSkipPolicy(
+            @Value("${batch.payroll.skip-limit:100}") int skipLimit) {
+        this.skipLimit = skipLimit;
+    }
 
     @Override
     public boolean shouldSkip(Throwable t, long skipCount) throws SkipLimitExceededException {
@@ -48,11 +54,11 @@ public class PayrollBatchSkipPolicy implements SkipPolicy {
     }
 
     private void checkSkipLimit(long skipCount, Throwable t) {
-        if (skipCount >= SKIP_LIMIT) {
+        if (skipCount >= skipLimit) {
             log.error("[SKIP_REJECT] [{}] 한도 {}건 초과 → Job 강제 종료 | cause={}: {}",
                     BatchSystemErrorCode.SKIP_LIMIT_EXCEEDED.getCode(),
-                    SKIP_LIMIT, t.getClass().getSimpleName(), t.getMessage());
-            throw new SkipLimitExceededException(SKIP_LIMIT, t);
+                    skipLimit, t.getClass().getSimpleName(), t.getMessage());
+            throw new SkipLimitExceededException(skipLimit, t);
         }
     }
 }
