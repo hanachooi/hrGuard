@@ -1,8 +1,20 @@
 dependencies {
     implementation project(':hrGuard-common')
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'com.github.f4b6a3:tsid-creator:5.2.6'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot'
     runtimeOnly 'com.mysql:mysql-connector-j'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.batch:spring-batch-core'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+
+// Lombok 설정 (Test) -> 이 부분이 추가되어야 테스트에서 Lombok이 먹힙니다!
+    testCompileOnly 'org.projectlombok:lombok'
+    testAnnotationProcessor 'org.projectlombok:lombok'
+
+    // Testing
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
