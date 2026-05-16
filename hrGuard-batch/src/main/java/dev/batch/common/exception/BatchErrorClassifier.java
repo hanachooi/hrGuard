@@ -17,8 +17,16 @@ import org.springframework.dao.TransientDataAccessException;
  *   <li>{@link OutOfMemoryError} / DataAccessException / Connect 계열 / SkipLimitExceeded → {@link BatchErrorType#STOP}</li>
  *   <li>그 외 → {@link BatchSystemErrorCode#UNEXPECTED_ERROR}</li>
  * </ol>
+ *
+ * <p><b>cause 체인 처리 방식</b> — Spring/Hibernate 예외는 wrapper 계층이 깊다
+ * (예: {@code PessimisticLockingFailureException → JDBCException → SQLException}).
+ * root 까지 끝까지 unwrap 하면 SQLException 처럼 우리 분류 범주 밖의 base 예외만
+ * 남아 매칭에 실패할 수 있다. 따라서 root 가 아니라 <b>체인을 위에서부터 따라가며
+ * 첫 매칭에서 멈춘다</b>. 순환 참조 방어를 위해 최대 10단계까지만 탐색.</p>
  */
 public final class BatchErrorClassifier {
+
+    private static final int MAX_DEPTH = 10;
 
     private BatchErrorClassifier() {}
 
@@ -27,63 +35,64 @@ public final class BatchErrorClassifier {
     }
 
     public static Classification classify(Throwable t) {
-        Throwable root = unwrapRoot(t);
+        Throwable current = t;
+        int depth = 0;
+        while (current != null && depth < MAX_DEPTH) {
+            Classification matched = matchOne(current);
+            if (matched != null) return matched;
+            Throwable next = current.getCause();
+            if (next == null || next == current) break;
+            current = next;
+            depth++;
+        }
+        return of(BatchSystemErrorCode.UNEXPECTED_ERROR, t);
+    }
 
+    /** 한 단계의 throwable 만 보고 매칭. 매칭 없으면 null. */
+    private static Classification matchOne(Throwable t) {
         // 1. 도메인 예외 — 명시 분류
-        if (root instanceof BatchException be) {
+        if (t instanceof BatchException be) {
             BatchErrorCode ec = be.getCommonError();
-            return new Classification(ec.getType(), ec.getCode(), ec.getMessage(), root);
+            return new Classification(ec.getType(), ec.getCode(), ec.getMessage(), t);
         }
 
-        // 2. RETRY — 일시적 데이터 접근 오류
-        if (root instanceof TransientDataAccessException) {
-            return of(BatchSystemErrorCode.DATABASE_TRANSIENT_ERROR, root);
+        // 2. RETRY — 일시적 데이터 접근 오류 (deadlock / lock timeout / query timeout)
+        if (t instanceof TransientDataAccessException) {
+            return of(BatchSystemErrorCode.DATABASE_TRANSIENT_ERROR, t);
         }
 
         // 2-2. RETRY — 일시적 네트워크 오류 (소켓 read timeout / 통신 도중 단절)
         //   ConnectException(연결 수립 자체 실패)은 보통 영구 다운이므로 STOP 으로 별도 분류한다.
-        if (isClass(root, "java.net.SocketTimeoutException")
-                || isClass(root, "com.mysql.cj.exceptions.CommunicationsException")
-                || isClass(root, "com.mysql.cj.jdbc.exceptions.CommunicationsException")) {
-            return of(BatchSystemErrorCode.NETWORK_TRANSIENT_ERROR, root);
+        if (isClass(t, "java.net.SocketTimeoutException")
+                || isClass(t, "com.mysql.cj.exceptions.CommunicationsException")
+                || isClass(t, "com.mysql.cj.jdbc.exceptions.CommunicationsException")) {
+            return of(BatchSystemErrorCode.NETWORK_TRANSIENT_ERROR, t);
         }
 
         // 3. STOP — 치명적 인프라/시스템 오류
-        if (root instanceof OutOfMemoryError) {
-            return of(BatchSystemErrorCode.OUT_OF_MEMORY, root);
+        if (t instanceof OutOfMemoryError) {
+            return of(BatchSystemErrorCode.OUT_OF_MEMORY, t);
         }
-        if (root instanceof SkipLimitExceededException) {
-            return of(BatchSystemErrorCode.SKIP_LIMIT_EXCEEDED, root);
+        if (t instanceof SkipLimitExceededException) {
+            return of(BatchSystemErrorCode.SKIP_LIMIT_EXCEEDED, t);
         }
-        if (isClass(root, "org.springframework.security.access.AccessDeniedException")) {
-            return of(BatchSystemErrorCode.ACCESS_DENIED, root);
+        if (isClass(t, "org.springframework.security.access.AccessDeniedException")) {
+            return of(BatchSystemErrorCode.ACCESS_DENIED, t);
         }
-        if (isClass(root, "java.net.ConnectException")) {
-            return of(BatchSystemErrorCode.INFRASTRUCTURE_UNAVAILABLE, root);
+        if (isClass(t, "java.net.ConnectException")) {
+            return of(BatchSystemErrorCode.INFRASTRUCTURE_UNAVAILABLE, t);
         }
-        if (isDataAccessException(root)) {
-            return of(BatchSystemErrorCode.DATABASE_ERROR, root);
+        if (isDataAccessException(t)) {
+            return of(BatchSystemErrorCode.DATABASE_ERROR, t);
         }
 
-        // 4. UNEXPECTED
-        return of(BatchSystemErrorCode.UNEXPECTED_ERROR, root);
+        return null;
     }
 
     // ── 내부 유틸 ────────────────────────────────────────────────────────────
 
     private static Classification of(BatchErrorCode code, Throwable cause) {
         return new Classification(code.getType(), code.getCode(), code.getMessage(), cause);
-    }
-
-    /** 순환 참조 방어를 위해 최대 10단계까지 cause 체인을 탐색한다. */
-    private static Throwable unwrapRoot(Throwable t) {
-        Throwable current = t;
-        int depth = 0;
-        while (current.getCause() != null && current.getCause() != current && depth < 10) {
-            current = current.getCause();
-            depth++;
-        }
-        return current;
     }
 
     private static boolean isClass(Throwable t, String fqcn) {
