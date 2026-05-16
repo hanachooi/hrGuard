@@ -6,22 +6,18 @@ import dev.batch.common.exception.BatchErrorClassifier;
 import dev.batch.common.exception.BatchErrorClassifier.Classification;
 import dev.batch.common.exception.BatchErrorType;
 import dev.batch.payroll.dto.PayrollInputDto;
-import dev.common.configuration.DataSourceConfig;
 import dev.payroll.entity.MonthlyPayroll;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.SkipListener;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
-
-import javax.sql.DataSource;
 
 /**
  * Skip 발생 시 원인을 분류하여 로그와 Dead Letter Table(DLT)에 기록하는 리스너.
  *
- * <p>{@link BatchErrorClassifier} 분류 결과({@link BatchErrorType})에 따라 DLT 적재 여부를 결정한다.</p>
+ * <p>{@link BatchErrorClassifier} 분류 결과({@link BatchErrorType})에 따라 DLT 적재 여부를 결정한다.
+ * 실제 INSERT 는 {@link PayrollErrorLogWriter}(REQUIRES_NEW)에 위임하여 chunk 트랜잭션과 격리한다.</p>
  *
  * <h3>저장 정책</h3>
  * <ul>
@@ -37,13 +33,13 @@ public class PayrollSkipListener implements SkipListener<PayrollInputDto, Monthl
     private final Counter skipReadCounter;
     private final Counter skipProcessCounter;
     private final Counter skipWriteCounter;
-    private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
+    private final PayrollErrorLogWriter errorLogWriter;
 
     public PayrollSkipListener(
             MeterRegistry meterRegistry,
             ObjectMapper objectMapper,
-            @Qualifier(DataSourceConfig.DOMAIN_DATASOURCE) DataSource domainDataSource) {
+            PayrollErrorLogWriter errorLogWriter) {
         this.skipReadCounter = Counter.builder("payroll.batch.skip")
                 .tag("phase", "read")
                 .description("Reader 단계 skip 횟수")
@@ -56,8 +52,8 @@ public class PayrollSkipListener implements SkipListener<PayrollInputDto, Monthl
                 .tag("phase", "write")
                 .description("Writer 단계 skip 횟수")
                 .register(meterRegistry);
-        this.jdbcTemplate = new JdbcTemplate(domainDataSource);
         this.objectMapper = objectMapper;
+        this.errorLogWriter = errorLogWriter;
     }
 
     // ── Reader skip ──────────────────────────────────────────────────────────
@@ -101,25 +97,13 @@ public class PayrollSkipListener implements SkipListener<PayrollInputDto, Monthl
         saveErrorLog(memberId, year, month, "WRITE", c, toJson(item));
     }
 
-    // ── DLT 저장 ─────────────────────────────────────────────────────────────
+    // ── DLT 저장 위임 ────────────────────────────────────────────────────────
 
     private void saveErrorLog(Long memberId, Integer year, Integer month,
                               String phase, Classification c, String originalDataJson) {
         // STOP 은 DLT 미적재 (배치 자체가 중단되어 재처리 의미 없음)
         if (c.type() == BatchErrorType.STOP) return;
-
-        try {
-            jdbcTemplate.update("""
-                INSERT INTO payroll_error_log
-                    (member_id, `year`, `month`, phase, error_type, error_code, error_message, original_data, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
-                """,
-                memberId, year, month, phase,
-                c.type().name(), c.code(), c.message(), originalDataJson);
-        } catch (Exception e) {
-            log.error("[SKIP] payroll_error_log 저장 실패 — memberId={} phase={} cause={}",
-                    memberId, phase, e.getMessage());
-        }
+        errorLogWriter.save(memberId, year, month, phase, c, originalDataJson);
     }
 
     /** 원본 데이터를 JSON 으로 직렬화. 실패 시 fallback. */
