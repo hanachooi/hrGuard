@@ -4,6 +4,7 @@ import dev.batch.common.exception.BatchException;
 import dev.batch.payroll.exception.PayrollBatchErrorCode;
 import dev.batch.payroll.dto.PayrollInputDto;
 import dev.batch.payroll.listener.PayrollChunkListener;
+import dev.batch.payroll.listener.PayrollRetryListener;
 import dev.batch.payroll.listener.PayrollSkipListener;
 import dev.common.configuration.DataSourceConfig;
 import dev.common.configuration.TransactionManagerConfig;
@@ -38,10 +39,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.dao.TransientDataAccessException;
+import org.springframework.retry.backoff.BackOffPolicy;
+import org.springframework.retry.backoff.FixedBackOffPolicy;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
 import java.lang.management.ManagementFactory;
+import java.net.SocketTimeoutException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.YearMonth;
@@ -62,8 +66,9 @@ public class PayrollStepConfig {
     private static final Logger heapLog = LoggerFactory.getLogger("dev.batch.heap");
 
     private static final int CHUNK_SIZE = 100;
-    private static final int SKIP_LIMIT = 50;
     private static final int RETRY_LIMIT = 3;
+    /** Deadlock 등 일시적 DB 오류 재시도 간격(ms). 즉시 재시도 시 부하 가중을 막는다. */
+    private static final long RETRY_BACKOFF_MS = 2000L;
 
     /**
      * 근로기준법 제53조: 주 연장근로 최대 12시간
@@ -81,6 +86,8 @@ public class PayrollStepConfig {
     private final TaxCalculator taxCalculator;
     private final PayrollChunkListener payrollChunkListener;
     private final PayrollSkipListener payrollSkipListener;
+    private final PayrollRetryListener payrollRetryListener;
+    private final PayrollBatchSkipPolicy payrollBatchSkipPolicy;
     @Qualifier(TransactionManagerConfig.DOMAIN_TRANSACTION_MANAGER)
     private final PlatformTransactionManager domainTransactionManager;
     @Qualifier(DataSourceConfig.DOMAIN_DATASOURCE)
@@ -103,13 +110,25 @@ public class PayrollStepConfig {
                 .listener((StepExecutionListener) payrollChunkListener)
                 .listener(payrollStepListener())
                 .faultTolerant()
-                .skip(BatchException.class)
-                .skipLimit(SKIP_LIMIT)
-                .noSkip(Error.class)
-                .retry(TransientDataAccessException.class)
+                .skipPolicy(payrollBatchSkipPolicy)               // 에러 코드 기반 skip 직접 제어
+                .retry(TransientDataAccessException.class)        // DB deadlock / lock / query timeout
+                .retry(SocketTimeoutException.class)              // 일시적 네트워크 read timeout
                 .retryLimit(RETRY_LIMIT)
+                .backOffPolicy(payrollRetryBackOffPolicy())
                 .listener(payrollSkipListener)
+                .listener(payrollRetryListener)
                 .build();
+    }
+
+    /**
+     * 일시적 DB 오류(deadlock 등) 재시도 간 back-off.
+     * 즉시 3회 연속 재시도는 동일 트랜잭션 충돌을 가중시키므로 고정 2초 간격을 둔다.
+     */
+    @Bean
+    public BackOffPolicy payrollRetryBackOffPolicy() {
+        FixedBackOffPolicy policy = new FixedBackOffPolicy();
+        policy.setBackOffPeriod(RETRY_BACKOFF_MS);
+        return policy;
     }
 
     @Bean
