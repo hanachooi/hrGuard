@@ -1,8 +1,8 @@
 package dev.batch.payroll.step;
 
 import dev.batch.common.exception.BatchException;
-import dev.batch.payroll.exception.PayrollBatchErrorCode;
 import dev.batch.payroll.dto.PayrollInputDto;
+import dev.batch.payroll.exception.PayrollBatchErrorCode;
 import dev.batch.payroll.listener.PayrollChunkListener;
 import dev.batch.payroll.listener.PayrollRetryListener;
 import dev.batch.payroll.listener.PayrollSkipListener;
@@ -45,8 +45,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
 import java.lang.management.ManagementFactory;
-import java.net.SocketTimeoutException;
 import java.math.BigDecimal;
+import java.net.SocketTimeoutException;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.temporal.WeekFields;
@@ -124,6 +124,7 @@ public class PayrollStepConfig {
                 .retry(SocketTimeoutException.class)              // 일시적 네트워크 read timeout
                 .retryLimit(retryLimit)
                 .backOffPolicy(payrollRetryBackOffPolicy())
+                .processorNonTransactional()                      // chunk-level retry + scan 모드 충돌 회피
                 .listener(payrollSkipListener)
                 .listener(payrollRetryListener)
                 .build();
