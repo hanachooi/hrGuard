@@ -289,9 +289,13 @@ public class PayrollStepConfig {
                         recordsMap.values().stream().mapToInt(List::size).sum(), queryMs);
                 heapLog.info("[HEAP] READER_END   total={} heap_mb={}", dtoCreatedTotal.get(), heapMb);
 
+                int yearValue  = ym.getYear();
+                int monthValue = ym.getMonthValue();
                 for (Long memberId : memberIds) {
                     buffer.add(new PayrollInputDto(
                             memberId,
+                            yearValue,
+                            monthValue,
                             scheduleMap.get(memberId),
                             policyMap.get(memberId),
                             recordsMap.getOrDefault(memberId, List.of())

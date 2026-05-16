@@ -75,10 +75,12 @@ public class PayrollSkipListener implements SkipListener<PayrollInputDto, Monthl
         skipProcessCounter.increment();
         Classification c = BatchErrorClassifier.classify(t);
         long memberId = item.memberId();
+        int year      = item.year();
+        int month     = item.month();
 
-        log.warn("[SKIP][PROCESS] memberId={} | [{}] {}",
-                memberId, c.code(), c.message());
-        saveErrorLog(memberId, null, null, "PROCESS", c, toJson(item));
+        log.warn("[SKIP][PROCESS] memberId={} | {}년{}월 | [{}] {}",
+                memberId, year, month, c.code(), c.message());
+        saveErrorLog(memberId, year, month, "PROCESS", c, toJson(item));
     }
 
     // ── Writer skip ──────────────────────────────────────────────────────────
