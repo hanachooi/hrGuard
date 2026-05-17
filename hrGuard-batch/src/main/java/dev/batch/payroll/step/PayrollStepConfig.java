@@ -1,6 +1,7 @@
 package dev.batch.payroll.step;
 
 import dev.batch.common.exception.BatchException;
+import dev.batch.common.exception.BatchSystemErrorCode;
 import dev.batch.payroll.dto.PayrollInputDto;
 import dev.batch.payroll.exception.PayrollBatchErrorCode;
 import dev.batch.payroll.listener.PayrollChunkListener;
@@ -39,8 +40,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.dao.TransientDataAccessException;
+import org.springframework.retry.RetryCallback;
 import org.springframework.retry.backoff.BackOffPolicy;
 import org.springframework.retry.backoff.ExponentialBackOffPolicy;
+import org.springframework.retry.policy.SimpleRetryPolicy;
+import org.springframework.retry.support.RetryTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
@@ -109,6 +113,11 @@ public class PayrollStepConfig {
             ItemProcessor<PayrollInputDto, MonthlyPayroll> payrollProcessor,
             ItemWriter<MonthlyPayroll> payrollWriter
     ) {
+        // Retry 는 chunk-level 이 아니라 writer 내부 stateless RetryTemplate 으로 처리한다.
+        // 이유: Spring Batch 의 chunk-level retry + skip 조합은 retry cache key (chunk items 의 hashCode)
+        //       가 트랜잭션 사이에 변형되면 TerminatedRetryException 으로 step 이 깨진다.
+        //       Writer 내부 stateless retry 는 이 매커니즘과 격리되어 안전하다.
+        // 정책: retry 소진 시 BatchException(RETRY_EXHAUSTED=STOP) 으로 escalate → step FAILED.
         return new StepBuilder("payrollStep", jobRepository)
                 .<PayrollInputDto, MonthlyPayroll>chunk(CHUNK_SIZE, domainTransactionManager)
                 .reader(payrollReader)
@@ -119,14 +128,8 @@ public class PayrollStepConfig {
                 .listener((StepExecutionListener) payrollChunkListener)
                 .listener(payrollStepListener())
                 .faultTolerant()
-                .skipPolicy(payrollBatchSkipPolicy)               // 에러 코드 기반 skip 직접 제어
-                .retry(TransientDataAccessException.class)        // DB deadlock / lock / query timeout
-                .retry(SocketTimeoutException.class)              // 일시적 네트워크 read timeout
-                .retryLimit(retryLimit)
-                .backOffPolicy(payrollRetryBackOffPolicy())
-                .processorNonTransactional()                      // chunk-level retry + scan 모드 충돌 회피
+                .skipPolicy(payrollBatchSkipPolicy)               // SKIP / STOP 분기만 담당 (RETRY 는 writer 내부)
                 .listener(payrollSkipListener)
-                .listener(payrollRetryListener)
                 .build();
     }
 
@@ -144,6 +147,33 @@ public class PayrollStepConfig {
         policy.setMultiplier(retryBackoffMultiplier);
         policy.setMaxInterval(retryBackoffMaxMs);
         return policy;
+    }
+
+    /**
+     * Writer 내부 retry 용 stateless RetryTemplate.
+     *
+     * <p>Spring Batch 의 chunk-level stateful retry 와 달리, 이 템플릿은 cache 를 쓰지 않아
+     * 같은 chunk 의 item hashCode 가 변형되어도 안전하다 (TerminatedRetryException 회피).</p>
+     *
+     * <p><b>정책</b></p>
+     * <ul>
+     *   <li>Retry 대상: {@link TransientDataAccessException} (DB lock/deadlock/query timeout),
+     *       {@link SocketTimeoutException} (일시적 네트워크 단절)</li>
+     *   <li>최대 시도: {@code batch.payroll.retry.limit} (기본 3)</li>
+     *   <li>Back-off: {@link #payrollRetryBackOffPolicy()}</li>
+     *   <li>각 시도/소진 로깅: {@link PayrollRetryListener}</li>
+     * </ul>
+     */
+    @Bean
+    public RetryTemplate payrollWriterRetryTemplate() {
+        RetryTemplate template = new RetryTemplate();
+        template.setBackOffPolicy(payrollRetryBackOffPolicy());
+        Map<Class<? extends Throwable>, Boolean> retryable = Map.of(
+                TransientDataAccessException.class, true,
+                SocketTimeoutException.class, true);
+        template.setRetryPolicy(new SimpleRetryPolicy(retryLimit, retryable));
+        template.registerListener(payrollRetryListener);
+        return template;
     }
 
     @Bean
@@ -429,63 +459,84 @@ public class PayrollStepConfig {
      * 4) INSERT INTO monthly_payroll ... (jdbcTemplate.batchUpdate)            — 부모 bulk insert
      * 5) INSERT INTO payroll_item ... (jdbcTemplate.batchUpdate)               — 자식 bulk insert
      * year/month 는 jobParameter 로 chunk 내 동일하므로 첫 item 기준으로 추출.
+     *
+     * <p><b>Retry 흐름</b> — {@link #payrollWriterRetryTemplate()} 으로 감싸 일시적 DB/네트워크
+     * 오류를 stateless 하게 재시도한다. 한도 소진 시 마지막 예외를
+     * {@link BatchException}({@link BatchSystemErrorCode#RETRY_EXHAUSTED}=STOP) 으로 wrap 해
+     * 던지면 SkipPolicy 의 STOP 분기에서 step FAILED 로 종료된다.</p>
      */
     @Bean
-    public ItemWriter<MonthlyPayroll> payrollWriter() {
+    public ItemWriter<MonthlyPayroll> payrollWriter(RetryTemplate payrollWriterRetryTemplate) {
         return chunk -> {
-            List<? extends MonthlyPayroll> items = chunk.getItems();
-            int itemCount = items.size();
-            long beforeMb = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed() / (1024 * 1024);
-            heapLog.info("[HEAP] WRITER_IN    items={} heap_mb={}", itemCount, beforeMb);
-
-            if (items.isEmpty()) {
-                return;
+            try {
+                payrollWriterRetryTemplate.execute((RetryCallback<Void, Exception>) ctx -> {
+                    doWriteChunk(chunk.getItems());
+                    return null;
+                });
+            } catch (TransientDataAccessException | SocketTimeoutException e) {
+                // retry 소진 — STOP 으로 escalate
+                throw new BatchException(BatchSystemErrorCode.RETRY_EXHAUSTED, e);
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                // RetryCallback 시그니처상 checked 도 가능. 실제 발생 가능성은 없지만 안전망.
+                throw new BatchException(BatchSystemErrorCode.UNEXPECTED_ERROR, e);
             }
-
-            long t0 = System.nanoTime();
-
-            int year = items.get(0).getYear();
-            int month = items.get(0).getMonth();
-            List<Long> memberIds = items.stream()
-                    .map(MonthlyPayroll::getMemberId)
-                    .toList();
-
-            long tSelectStart = System.nanoTime();
-            List<Long> existingIds = monthlyPayrollRepository
-                    .findIdsByYearAndMonthAndMemberIdIn(year, month, memberIds);
-            long selectMs = (System.nanoTime() - tSelectStart) / 1_000_000;
-
-            long deleteMs = 0;
-            if (!existingIds.isEmpty()) {
-                long tDeleteStart = System.nanoTime();
-                payrollItemRepository.deleteByMonthlyPayrollIdIn(existingIds);
-                monthlyPayrollRepository.deleteByIdIn(existingIds);
-                deleteMs = (System.nanoTime() - tDeleteStart) / 1_000_000;
-            }
-
-            List<MonthlyPayroll> payrolls = new ArrayList<>(items);
-            long tInsertParentStart = System.nanoTime();
-            monthlyPayrollRepository.batchInsert(payrolls);
-            long insertParentMs = (System.nanoTime() - tInsertParentStart) / 1_000_000;
-
-            List<PayrollItemProjection> allItems = payrolls.stream()
-                    .flatMap(p -> p.getPendingItems().stream())
-                    .toList();
-            long insertItemMs = 0;
-            if (!allItems.isEmpty()) {
-                long tInsertItemStart = System.nanoTime();
-                payrollItemRepository.batchInsert(allItems);
-                insertItemMs = (System.nanoTime() - tInsertItemStart) / 1_000_000;
-            }
-
-            long totalMs = (System.nanoTime() - t0) / 1_000_000;
-            log.info("[Writer] chunk={}건 {}년{}월 총={}ms (select={}ms, delete={}ms[existing={}건], insertPayroll={}ms, insertItem={}ms[items={}건])",
-                    itemCount, year, month, totalMs,
-                    selectMs, deleteMs, existingIds.size(),
-                    insertParentMs, insertItemMs, allItems.size());
-
-            long afterMb = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed() / (1024 * 1024);
-            heapLog.info("[HEAP] WRITER_OUT   items={} heap_mb={}", itemCount, afterMb);
         };
+    }
+
+    private void doWriteChunk(List<? extends MonthlyPayroll> items) {
+        int itemCount = items.size();
+        long beforeMb = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed() / (1024 * 1024);
+        heapLog.info("[HEAP] WRITER_IN    items={} heap_mb={}", itemCount, beforeMb);
+
+        if (items.isEmpty()) {
+            return;
+        }
+
+        long t0 = System.nanoTime();
+
+        int year = items.get(0).getYear();
+        int month = items.get(0).getMonth();
+        List<Long> memberIds = items.stream()
+                .map(MonthlyPayroll::getMemberId)
+                .toList();
+
+        long tSelectStart = System.nanoTime();
+        List<Long> existingIds = monthlyPayrollRepository
+                .findIdsByYearAndMonthAndMemberIdIn(year, month, memberIds);
+        long selectMs = (System.nanoTime() - tSelectStart) / 1_000_000;
+
+        long deleteMs = 0;
+        if (!existingIds.isEmpty()) {
+            long tDeleteStart = System.nanoTime();
+            payrollItemRepository.deleteByMonthlyPayrollIdIn(existingIds);
+            monthlyPayrollRepository.deleteByIdIn(existingIds);
+            deleteMs = (System.nanoTime() - tDeleteStart) / 1_000_000;
+        }
+
+        List<MonthlyPayroll> payrolls = new ArrayList<>(items);
+        long tInsertParentStart = System.nanoTime();
+        monthlyPayrollRepository.batchInsert(payrolls);
+        long insertParentMs = (System.nanoTime() - tInsertParentStart) / 1_000_000;
+
+        List<PayrollItemProjection> allItems = payrolls.stream()
+                .flatMap(p -> p.getPendingItems().stream())
+                .toList();
+        long insertItemMs = 0;
+        if (!allItems.isEmpty()) {
+            long tInsertItemStart = System.nanoTime();
+            payrollItemRepository.batchInsert(allItems);
+            insertItemMs = (System.nanoTime() - tInsertItemStart) / 1_000_000;
+        }
+
+        long totalMs = (System.nanoTime() - t0) / 1_000_000;
+        log.info("[Writer] chunk={}건 {}년{}월 총={}ms (select={}ms, delete={}ms[existing={}건], insertPayroll={}ms, insertItem={}ms[items={}건])",
+                itemCount, year, month, totalMs,
+                selectMs, deleteMs, existingIds.size(),
+                insertParentMs, insertItemMs, allItems.size());
+
+        long afterMb = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed() / (1024 * 1024);
+        heapLog.info("[HEAP] WRITER_OUT   items={} heap_mb={}", itemCount, afterMb);
     }
 }
