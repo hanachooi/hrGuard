@@ -1,7 +1,6 @@
 package dev.batch.payroll.step;
 
 import dev.batch.common.exception.BatchException;
-import dev.batch.common.exception.BatchSystemErrorCode;
 import dev.batch.payroll.dto.PayrollInputDto;
 import dev.batch.payroll.exception.PayrollBatchErrorCode;
 import dev.batch.payroll.listener.PayrollChunkListener;
@@ -40,11 +39,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.dao.TransientDataAccessException;
-import org.springframework.retry.RetryCallback;
 import org.springframework.retry.backoff.BackOffPolicy;
 import org.springframework.retry.backoff.ExponentialBackOffPolicy;
-import org.springframework.retry.policy.SimpleRetryPolicy;
-import org.springframework.retry.support.RetryTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import javax.sql.DataSource;
@@ -113,11 +109,12 @@ public class PayrollStepConfig {
             ItemProcessor<PayrollInputDto, MonthlyPayroll> payrollProcessor,
             ItemWriter<MonthlyPayroll> payrollWriter
     ) {
-        // Retry 는 chunk-level 이 아니라 writer 내부 stateless RetryTemplate 으로 처리한다.
-        // 이유: Spring Batch 의 chunk-level retry + skip 조합은 retry cache key (chunk items 의 hashCode)
-        //       가 트랜잭션 사이에 변형되면 TerminatedRetryException 으로 step 이 깨진다.
-        //       Writer 내부 stateless retry 는 이 매커니즘과 격리되어 안전하다.
-        // 정책: retry 소진 시 BatchException(RETRY_EXHAUSTED=STOP) 으로 escalate → step FAILED.
+        // Spring Batch 5.x 의 표준 fault-tolerant 매커니즘을 그대로 사용.
+        // 핵심 — FaultTolerantChunkProcessor.recoveryCallback 의 `if (!shouldSkip(...))` 분기:
+        //   retry 소진 시점에 SkipPolicy 가 false 를 반환하면 Scan 모드 진입 없이
+        //   ExhaustedRetryException 으로 곧장 step FAILED. cache key 변형 함정 회피.
+        // 정책: transient 예외는 retry 만 (skip 불가) → 소진 시 STOP.
+        //       데이터 SKIP 케이스만 skip + DLT (PayrollBatchSkipPolicy 분기에서 결정).
         return new StepBuilder("payrollStep", jobRepository)
                 .<PayrollInputDto, MonthlyPayroll>chunk(CHUNK_SIZE, domainTransactionManager)
                 .reader(payrollReader)
@@ -128,8 +125,14 @@ public class PayrollStepConfig {
                 .listener((StepExecutionListener) payrollChunkListener)
                 .listener(payrollStepListener())
                 .faultTolerant()
-                .skipPolicy(payrollBatchSkipPolicy)               // SKIP / STOP 분기만 담당 (RETRY 는 writer 내부)
+                .skipPolicy(payrollBatchSkipPolicy)                // SKIP / RETRY-EXHAUSTED / STOP 분기를 단일 정책에서 결정
+                .retry(TransientDataAccessException.class)         // DB lock / deadlock / query timeout
+                .retry(SocketTimeoutException.class)               // 일시 네트워크 read timeout
+                .retryLimit(retryLimit)
+                .backOffPolicy(payrollRetryBackOffPolicy())
+                .processorNonTransactional()                       // processor 결과 캐시 — retry/scan 시 재계산 회피
                 .listener(payrollSkipListener)
+                .listener(payrollRetryListener)
                 .build();
     }
 
@@ -147,33 +150,6 @@ public class PayrollStepConfig {
         policy.setMultiplier(retryBackoffMultiplier);
         policy.setMaxInterval(retryBackoffMaxMs);
         return policy;
-    }
-
-    /**
-     * Writer 내부 retry 용 stateless RetryTemplate.
-     *
-     * <p>Spring Batch 의 chunk-level stateful retry 와 달리, 이 템플릿은 cache 를 쓰지 않아
-     * 같은 chunk 의 item hashCode 가 변형되어도 안전하다 (TerminatedRetryException 회피).</p>
-     *
-     * <p><b>정책</b></p>
-     * <ul>
-     *   <li>Retry 대상: {@link TransientDataAccessException} (DB lock/deadlock/query timeout),
-     *       {@link SocketTimeoutException} (일시적 네트워크 단절)</li>
-     *   <li>최대 시도: {@code batch.payroll.retry.limit} (기본 3)</li>
-     *   <li>Back-off: {@link #payrollRetryBackOffPolicy()}</li>
-     *   <li>각 시도/소진 로깅: {@link PayrollRetryListener}</li>
-     * </ul>
-     */
-    @Bean
-    public RetryTemplate payrollWriterRetryTemplate() {
-        RetryTemplate template = new RetryTemplate();
-        template.setBackOffPolicy(payrollRetryBackOffPolicy());
-        Map<Class<? extends Throwable>, Boolean> retryable = Map.of(
-                TransientDataAccessException.class, true,
-                SocketTimeoutException.class, true);
-        template.setRetryPolicy(new SimpleRetryPolicy(retryLimit, retryable));
-        template.registerListener(payrollRetryListener);
-        return template;
     }
 
     @Bean
@@ -460,29 +436,14 @@ public class PayrollStepConfig {
      * 5) INSERT INTO payroll_item ... (jdbcTemplate.batchUpdate)               — 자식 bulk insert
      * year/month 는 jobParameter 로 chunk 내 동일하므로 첫 item 기준으로 추출.
      *
-     * <p><b>Retry 흐름</b> — {@link #payrollWriterRetryTemplate()} 으로 감싸 일시적 DB/네트워크
-     * 오류를 stateless 하게 재시도한다. 한도 소진 시 마지막 예외를
-     * {@link BatchException}({@link BatchSystemErrorCode#RETRY_EXHAUSTED}=STOP) 으로 wrap 해
-     * 던지면 SkipPolicy 의 STOP 분기에서 step FAILED 로 종료된다.</p>
+     * <p><b>Retry 흐름</b> — chunk-level retry (Step builder 의 {@code .retry / .retryLimit /
+     * .backOffPolicy}) 가 transient 예외를 재시도한다. 한도 소진 시 SkipPolicy 의 RETRY 분기가
+     * false 를 반환하므로 Scan 모드 진입 없이 곧장 {@code ExhaustedRetryException} 으로 step
+     * FAILED 된다.</p>
      */
     @Bean
-    public ItemWriter<MonthlyPayroll> payrollWriter(RetryTemplate payrollWriterRetryTemplate) {
-        return chunk -> {
-            try {
-                payrollWriterRetryTemplate.execute((RetryCallback<Void, Exception>) ctx -> {
-                    doWriteChunk(chunk.getItems());
-                    return null;
-                });
-            } catch (TransientDataAccessException | SocketTimeoutException e) {
-                // retry 소진 — STOP 으로 escalate
-                throw new BatchException(BatchSystemErrorCode.RETRY_EXHAUSTED, e);
-            } catch (RuntimeException e) {
-                throw e;
-            } catch (Exception e) {
-                // RetryCallback 시그니처상 checked 도 가능. 실제 발생 가능성은 없지만 안전망.
-                throw new BatchException(BatchSystemErrorCode.UNEXPECTED_ERROR, e);
-            }
-        };
+    public ItemWriter<MonthlyPayroll> payrollWriter() {
+        return chunk -> doWriteChunk(chunk.getItems());
     }
 
     private void doWriteChunk(List<? extends MonthlyPayroll> items) {

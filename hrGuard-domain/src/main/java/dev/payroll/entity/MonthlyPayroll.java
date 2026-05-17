@@ -22,7 +22,7 @@ import java.util.List;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @EntityListeners(AuditingEntityListener.class)
-@EqualsAndHashCode(of = "id")
+@EqualsAndHashCode(of = {"memberId", "year", "month"})
 @Table(uniqueConstraints = @UniqueConstraint(columnNames = {"member_id", "year", "month"}))
 public class MonthlyPayroll implements Persistable<Long> {
 

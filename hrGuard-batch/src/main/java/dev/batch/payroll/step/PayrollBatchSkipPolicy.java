@@ -19,10 +19,11 @@ import org.springframework.stereotype.Component;
  * <ul>
  *   <li>{@code STOP}  → [STOP] ERROR 후 즉시 배치 중단 (skipCount 무관). skip 한도 초과도 동일.</li>
  *   <li>{@code SKIP}  → [SKIP] WARN 후 한도 안에서 skip. 데이터 자체가 잘못된 케이스.</li>
- *   <li>{@code RETRY} → [SKIP] WARN 후 한도 안에서 skip.
- *       step.retry() 가 한도까지 시도했지만 풀리지 않은 케이스 — 액션은 skip 이므로
- *       라벨도 [SKIP] 으로 통일한다. 분류 코드(RETRY 류)는 그대로 노출되어 DLT 의
- *       error_type='RETRY' 와 1:1 매칭된다. 로그 메시지에 "retry 한도 소진" 부가설명 포함.</li>
+ *   <li>{@code RETRY} → [STOP] ERROR 후 false 반환.
+ *       step.retry() 가 한도까지 시도했지만 풀리지 않은 케이스. false 를 반환해야
+ *       {@code FaultTolerantChunkProcessor.recoveryCallback} 의 {@code !shouldSkip(...)}
+ *       분기로 진입, Scan 모드 없이 곧장 {@code ExhaustedRetryException} 으로 step FAILED.
+ *       Scan 모드를 건너뛰므로 RetryContextCache key 변형 → TerminatedRetryException 함정을 회피한다.</li>
  * </ul>
  */
 @Slf4j
@@ -30,10 +31,13 @@ import org.springframework.stereotype.Component;
 public class PayrollBatchSkipPolicy implements SkipPolicy {
 
     private final int skipLimit;
+    private final int retryLimit;
 
     public PayrollBatchSkipPolicy(
-            @Value("${batch.payroll.skip-limit:100}") int skipLimit) {
+            @Value("${batch.payroll.skip-limit:100}") int skipLimit,
+            @Value("${batch.payroll.retry.limit:3}") int retryLimit) {
         this.skipLimit = skipLimit;
+        this.retryLimit = retryLimit;
     }
 
     @Override
@@ -54,14 +58,14 @@ public class PayrollBatchSkipPolicy implements SkipPolicy {
                 yield true;
             }
             case RETRY -> {
-                // step.retry() 한도까지 시도했는데도 풀리지 않은 케이스.
-                // 액션은 skip 이므로 라벨도 [SKIP] 으로 통일 (retry 시도 자체는 RetryListener 가 [RETRY] 로 로깅).
-                // 분류 코드는 RETRY 류 유지 → DLT 의 error_type='RETRY' 와 1:1 매칭.
-                // skipCount=-1 인 분류용 호출에도 대비해 음수 보정.
-                checkSkipLimit(skipCount, t);
-                log.warn("[SKIP] [{}] retry 한도 소진 → skip 처리 (skip #{}) | cause={}",
-                        c.code(), Math.max(skipCount, 0) + 1, c.cause().getMessage());
-                yield true;
+                // chunk-level retry 가 소진되어 여기로 도달.
+                // false 반환 → FaultTolerantChunkProcessor.recoveryCallback 의
+                // (!shouldSkip) 분기에서 ExhaustedRetryException 으로 종료.
+                // Scan 모드 진입 안 함 → cache key 깨짐 회피.
+                log.error("[STOP] [{}] retry {}회 소진 → 배치 중단 | cause={}: {}",
+                        c.code(), retryLimit,
+                        c.cause().getClass().getSimpleName(), c.cause().getMessage());
+                yield false;
             }
         };
     }

@@ -21,9 +21,11 @@ import org.springframework.stereotype.Component;
  *
  * <h3>저장 정책</h3>
  * <ul>
- *   <li>{@link BatchErrorType#SKIP}  → 항상 저장 (보정 후 재배치 기반)</li>
- *   <li>{@link BatchErrorType#RETRY} → 저장 (재시도 소진 후 도달한 케이스)</li>
- *   <li>{@link BatchErrorType#STOP}  → 저장 안 함 (배치 자체가 중단되어 의미 없음)</li>
+ *   <li>{@link BatchErrorType#SKIP}  → 저장 (보정 후 재배치 기반). 실제로 SkipListener 가 호출되는 유일한 케이스.</li>
+ *   <li>{@link BatchErrorType#RETRY} → 도달 불가 — {@code PayrollBatchSkipPolicy} 의 RETRY 분기가 {@code false}
+ *       를 반환해 step FAILED 로 직행하므로 skip 이벤트 자체가 발생하지 않는다.</li>
+ *   <li>{@link BatchErrorType#STOP}  → 도달 불가 — SkipPolicy 가 {@code false} 반환.
+ *       (방어 차원으로 {@code saveErrorLog} 내부에서 한 번 더 STOP 가드)</li>
  * </ul>
  */
 @Slf4j
