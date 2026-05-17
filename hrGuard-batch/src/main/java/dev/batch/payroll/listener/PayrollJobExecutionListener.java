@@ -1,15 +1,19 @@
 package dev.batch.payroll.listener;
 
-import dev.batch.common.exception.BatchErrorCode;
+import dev.batch.common.exception.BatchErrorClassifier;
+import dev.batch.common.exception.BatchErrorClassifier.Classification;
 import dev.batch.common.exception.BatchException;
 import dev.payroll.service.InsuranceCalculator;
 import dev.payroll.service.TaxCalculator;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.JobExecution;
 import org.springframework.batch.core.JobExecutionListener;
+import org.springframework.batch.core.StepExecution;
+import org.springframework.boot.ExitCodeGenerator;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -19,21 +23,22 @@ import java.time.YearMonth;
 /**
  * Payroll Job 시작/종료 리스너.
  *
- * <p>API 모듈의 {@code GlobalExceptionHandler}에 대응합니다.
- * Job 종료 시점에 {@link JobExecution}에 등록된 실패 원인을 분석하여
- * 구조화된 오류 로그를 남기고 Micrometer 카운터를 증가시킵니다.</p>
+ * <p>Job 종료 시점에 {@link JobExecution}에 등록된 실패 원인을 {@link BatchErrorClassifier}에 위임하여
+ * 분류된 코드/메시지로 구조화된 오류 로그를 남기고 Micrometer 카운터를 증가시킵니다.</p>
  *
- * <h3>감지 대상</h3>
+ * <h3>OS Exit Code</h3>
+ * Job 종료 시 {@link ExitCodeGenerator}로 OS 종료 코드를 결정한다.
  * <ul>
- *   <li>{@link OutOfMemoryError} — JVM 힙 고갈</li>
- *   <li>DB 관련 예외 — {@code DataAccessException} 계열</li>
- *   <li>{@link BatchException} — 배치 비즈니스 예외</li>
- *   <li>그 외 모든 {@link Throwable} — UNEXPECTED_ERROR 처리</li>
+ *   <li>0 — 정상 (skip 0건)</li>
+ *   <li>1 — 비정상 종료 (FAILED/STOPPED/UNKNOWN, 스케줄러가 실패로 감지)</li>
+ *   <li>2 — 정상 종료지만 일부 데이터 skip 발생 (Warning, 운영자 점검 필요)</li>
  * </ul>
  */
 @Slf4j
 @Component
-public class PayrollJobExecutionListener implements JobExecutionListener {
+public class PayrollJobExecutionListener implements JobExecutionListener, ExitCodeGenerator {
+
+    private volatile int exitCode = 0;
 
     private final Counter jobSuccessCounter;
     private final Counter jobFailureCounter;
@@ -60,6 +65,12 @@ public class PayrollJobExecutionListener implements JobExecutionListener {
     @Override
     public void beforeJob(JobExecution jobExecution) {
         String yearMonth = jobExecution.getJobParameters().getString("yearMonth");
+
+        // 모든 로그 라인에 job 컨텍스트 자동 포함 (logback PATTERN의 %X{} 변수)
+        // 멀티스레드 Step 전환 시: TaskExecutor에 MDCTaskDecorator 등록 필요
+        MDC.put("jobName", "payrollJob");
+        MDC.put("jobParam", yearMonth != null ? yearMonth : "");
+
         LocalDate payrollDate = YearMonth.parse(yearMonth).atDay(1);
         insuranceCalculator.load(payrollDate);
         log.info("4대보험 요율 메모리 적재 완료 (기준일={})", payrollDate);
@@ -75,6 +86,7 @@ public class PayrollJobExecutionListener implements JobExecutionListener {
 
     @Override
     public void afterJob(JobExecution jobExecution) {
+      try {
         insuranceCalculator.clear();
         log.info("4대보험 요율 메모리 해제 완료");
         taxCalculator.clear();
@@ -82,123 +94,57 @@ public class PayrollJobExecutionListener implements JobExecutionListener {
 
         Duration elapsed = Duration.between(
                 jobExecution.getStartTime(), jobExecution.getEndTime());
+        String yearMonth = jobExecution.getJobParameters().getString("yearMonth");
 
         if (jobExecution.getStatus() == BatchStatus.COMPLETED) {
             jobSuccessCounter.increment();
-            log.info("===== [payrollJob 완료] yearMonth={}, 소요시간={}ms =====",
-                    jobExecution.getJobParameters().getString("yearMonth"),
-                    elapsed.toMillis());
+            long skipTotal = totalSkipCount(jobExecution);
+            this.exitCode = skipTotal > 0 ? 2 : 0;
+            log.info("===== [payrollJob 완료] yearMonth={}, 소요시간={}ms, skip={}건, exitCode={} =====",
+                    yearMonth, elapsed.toMillis(), skipTotal, this.exitCode);
             return;
         }
 
         // ── 실패 케이스 : 원인 분석 ─────────────────────────────────────────
         jobFailureCounter.increment();
+        this.exitCode = 1;
 
-        // JobExecution에 등록된 모든 예외를 순회하여 분류
         for (Throwable throwable : jobExecution.getAllFailureExceptions()) {
-            classify(throwable, jobExecution);
+            Classification c = BatchErrorClassifier.classify(throwable);
+            log.error("[{}] {} | type={} | yearMonth={} | cause={}: {}",
+                    c.code(), c.message(), c.type(),
+                    yearMonth,
+                    c.cause().getClass().getSimpleName(), c.cause().getMessage(),
+                    throwable);
         }
 
-        log.error("===== [payrollJob 비정상종료] status={}, yearMonth={}, 소요시간={}ms =====",
-                jobExecution.getStatus(),
-                jobExecution.getJobParameters().getString("yearMonth"),
-                elapsed.toMillis());
+        log.error("===== [payrollJob 비정상종료] status={}, yearMonth={}, 소요시간={}ms, exitCode=1 =====",
+                jobExecution.getStatus(), yearMonth, elapsed.toMillis());
+      } finally {
+          MDC.clear();
+      }
     }
 
-    // ── 예외 분류 ────────────────────────────────────────────────────────────
-
-    private void classify(Throwable throwable, JobExecution jobExecution) {
-        Throwable root = unwrap(throwable);
-
-        if (root instanceof OutOfMemoryError oom) {
-            handleOom(oom, jobExecution);
-        } else if (root instanceof BatchException batchEx) {
-            handleBatchException(batchEx, jobExecution);
-        } else if (isDataAccessException(root)) {
-            handleDatabaseError(root, jobExecution);
-        } else {
-            handleUnexpected(root, jobExecution);
+    /** 모든 Step 의 read/process/write skip 합계. */
+    private long totalSkipCount(JobExecution jobExecution) {
+        long total = 0;
+        for (StepExecution step : jobExecution.getStepExecutions()) {
+            total += step.getReadSkipCount()
+                  + step.getProcessSkipCount()
+                  + step.getWriteSkipCount();
         }
+        return total;
     }
 
-    /**
-     * OOM — 힙 부족. 청크 크기 축소 또는 힙 증설 필요
-     */
-    private void handleOom(OutOfMemoryError oom, JobExecution jobExecution) {
-        BatchException wrapped = new BatchException(BatchErrorCode.OUT_OF_MEMORY, oom);
-        log.error("[{}] {} | yearMonth={} | 조치: -Xmx 증설 또는 chunk-size 축소",
-                wrapped.getCommonError().getCode(),
-                wrapped.getCommonError().getMessage(),
-                jobExecution.getJobParameters().getString("yearMonth"),
-                oom);
+    @Override
+    public int getExitCode() {
+        return exitCode;
     }
 
-    /**
-     * BatchException — 배치 비즈니스 오류
-     */
-    private void handleBatchException(BatchException ex, JobExecution jobExecution) {
-        log.error("[{}] {} | yearMonth={} | code={}",
-                ex.getCommonError().getCode(),
-                ex.getCommonError().getMessage(),
-                jobExecution.getJobParameters().getString("yearMonth"),
-                ex.getCommonError().getCode(),
-                ex);
-    }
+    // ── 호환용 (BatchException 직접 처리할 일이 있다면 사용) ────────────────
 
-    /**
-     * DataAccessException 계열 — DB 연결·쿼리 오류
-     */
-    private void handleDatabaseError(Throwable ex, JobExecution jobExecution) {
-        BatchException wrapped = new BatchException(BatchErrorCode.DATABASE_ERROR, ex);
-        log.error("[{}] {} | yearMonth={} | cause={}",
-                wrapped.getCommonError().getCode(),
-                wrapped.getCommonError().getMessage(),
-                jobExecution.getJobParameters().getString("yearMonth"),
-                ex.getMessage(),
-                ex);
-    }
-
-    /**
-     * 그 외 치명적 오류
-     */
-    private void handleUnexpected(Throwable ex, JobExecution jobExecution) {
-        BatchException wrapped = new BatchException(BatchErrorCode.UNEXPECTED_ERROR, ex);
-        log.error("[{}] {} | yearMonth={} | cause={}",
-                wrapped.getCommonError().getCode(),
-                wrapped.getCommonError().getMessage(),
-                jobExecution.getJobParameters().getString("yearMonth"),
-                ex.getMessage(),
-                ex);
-    }
-
-    // ── 유틸리티 ─────────────────────────────────────────────────────────────
-
-    /**
-     * 중첩된 예외를 끝까지 풀어 근본 원인(root cause)을 반환합니다.
-     * 순환 참조 방어를 위해 최대 10단계까지만 탐색합니다.
-     */
-    private Throwable unwrap(Throwable throwable) {
-        Throwable current = throwable;
-        int depth = 0;
-        while (current.getCause() != null && current.getCause() != current && depth < 10) {
-            current = current.getCause();
-            depth++;
-        }
-        return current;
-    }
-
-    /**
-     * Spring의 {@code DataAccessException} 계열 여부를 클래스 이름으로 판단합니다.
-     * (hrGuard-batch가 spring-data 의존성을 갖지 않는 경우를 고려한 안전한 검사)
-     */
-    private boolean isDataAccessException(Throwable throwable) {
-        Class<?> clazz = throwable.getClass();
-        while (clazz != null) {
-            if ("org.springframework.dao.DataAccessException".equals(clazz.getName())) {
-                return true;
-            }
-            clazz = clazz.getSuperclass();
-        }
-        return false;
+    @SuppressWarnings("unused")
+    private static boolean isClassified(Throwable t) {
+        return t instanceof BatchException;
     }
 }

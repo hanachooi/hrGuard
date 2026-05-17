@@ -329,7 +329,8 @@ class ReaderTest {
         List<WorkRecordProjection> records = schedule != null
                 ? workRecordRepository.findProjectionByMemberIdAndBizDateBetween(memberId, from, to)
                 : List.of();
-        return new PayrollInputDto(memberId, schedule, policy, records);
+        YearMonth ym = YearMonth.parse(YEAR_MONTH);
+        return new PayrollInputDto(memberId, ym.getYear(), ym.getMonthValue(), schedule, policy, records);
     }
 
     private JpaPagingItemReader<Long> buildJpaPagingReader() throws Exception {
