@@ -4,6 +4,7 @@ import dev.batch.common.exception.BatchErrorClassifier;
 import dev.batch.common.exception.BatchErrorClassifier.Classification;
 import dev.batch.common.exception.BatchSystemErrorCode;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.batch.core.step.skip.SkipLimitExceededException;
 import org.springframework.batch.core.step.skip.SkipPolicy;
 import org.springframework.beans.factory.annotation.Value;
@@ -46,15 +47,23 @@ public class PayrollBatchSkipPolicy implements SkipPolicy {
 
         return switch (c.type()) {
             case STOP -> {
-                log.error("[STOP] [{}] {} → 배치 중단 | cause={}: {}",
-                        c.code(), c.message(),
-                        c.cause().getClass().getSimpleName(), c.cause().getMessage(), t);
+                try (var ignored1 = MDC.putCloseable("log_tag", "STOP");
+                     var ignored2 = MDC.putCloseable("error_code", c.code());
+                     var ignored3 = MDC.putCloseable("error_type", c.type().name())) {
+                    log.error("배치 중단 — {} | cause={}: {}",
+                            c.message(),
+                            c.cause().getClass().getSimpleName(), c.cause().getMessage(), t);
+                }
                 yield false;
             }
             case SKIP -> {
                 checkSkipLimit(skipCount, t);
-                log.warn("[SKIP] [{}] {} (skip #{}) | cause={}",
-                        c.code(), c.message(), Math.max(skipCount, 0) + 1, c.cause().getMessage());
+                try (var ignored1 = MDC.putCloseable("log_tag", "SKIP");
+                     var ignored2 = MDC.putCloseable("error_code", c.code());
+                     var ignored3 = MDC.putCloseable("error_type", c.type().name())) {
+                    log.warn("skip — {} (skip #{}) | cause={}",
+                            c.message(), Math.max(skipCount, 0) + 1, c.cause().getMessage());
+                }
                 yield true;
             }
             case RETRY -> {
@@ -62,9 +71,14 @@ public class PayrollBatchSkipPolicy implements SkipPolicy {
                 // false 반환 → FaultTolerantChunkProcessor.recoveryCallback 의
                 // (!shouldSkip) 분기에서 ExhaustedRetryException 으로 종료.
                 // Scan 모드 진입 안 함 → cache key 깨짐 회피.
-                log.error("[STOP] [{}] retry {}회 소진 → 배치 중단 | cause={}: {}",
-                        c.code(), retryLimit,
-                        c.cause().getClass().getSimpleName(), c.cause().getMessage());
+                // 라벨=액션축(STOP), error_code=원인축(RETRY 류 코드) — 의도된 어긋남.
+                try (var ignored1 = MDC.putCloseable("log_tag", "STOP");
+                     var ignored2 = MDC.putCloseable("error_code", c.code());
+                     var ignored3 = MDC.putCloseable("error_type", c.type().name())) {
+                    log.error("retry {}회 소진 → 배치 중단 | cause={}: {}",
+                            retryLimit,
+                            c.cause().getClass().getSimpleName(), c.cause().getMessage());
+                }
                 yield false;
             }
         };
@@ -73,9 +87,14 @@ public class PayrollBatchSkipPolicy implements SkipPolicy {
     /** skip 한도 초과는 STOP 의 한 종류로 분류된다. */
     private void checkSkipLimit(long skipCount, Throwable t) {
         if (skipCount >= skipLimit) {
-            log.error("[STOP] [{}] 한도 {}건 초과 → Job 강제 종료 | cause={}: {}",
-                    BatchSystemErrorCode.SKIP_LIMIT_EXCEEDED.getCode(),
-                    skipLimit, t.getClass().getSimpleName(), t.getMessage());
+            try (var ignored1 = MDC.putCloseable("log_tag", "STOP");
+                 var ignored2 = MDC.putCloseable("error_code",
+                         BatchSystemErrorCode.SKIP_LIMIT_EXCEEDED.getCode());
+                 var ignored3 = MDC.putCloseable("error_type",
+                         BatchSystemErrorCode.SKIP_LIMIT_EXCEEDED.getType().name())) {
+                log.error("skip 한도 {}건 초과 → Job 강제 종료 | cause={}: {}",
+                        skipLimit, t.getClass().getSimpleName(), t.getMessage());
+            }
             throw new SkipLimitExceededException(skipLimit, t);
         }
     }

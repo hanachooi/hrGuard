@@ -328,7 +328,8 @@ public class PayrollStepConfig {
                 return null;
             }
             if (input.payrollPolicy() == null) {
-                log.error("PayrollPolicy 미등록, skip: memberId={}", memberId);
+                // throw 만 하고 사전 로깅 X — type=SKIP 이므로 SkipListener 가
+                // [SKIP][PROCESS] WARN + DLT 적재의 단일 진입점.
                 throw new BatchException(PayrollBatchErrorCode.PAYROLL_POLICY_NOT_FOUND);
             }
 

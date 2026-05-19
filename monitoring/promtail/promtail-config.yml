@@ -1,0 +1,93 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+# ─────────────────────────────────────────────────────────────────────
+# 로그는 JSON 한 줄/이벤트로 적재된다 (LogstashEncoder).
+# json stage 로 모든 필드를 파싱하고 그 중 카디널리티 낮은 키만 라벨로 승격한다.
+#
+# MDC 필드 (Spring 측에서 주입 — logback-spring.xml 의 includeMdcKeyName 와 일치):
+#   log_tag     STOP | SKIP | RETRY                   ← 라벨로 승격 (대시보드 필터)
+#   error_code  BatchErrorCode 코드 문자열             ← 라벨로 승격 (코드별 카운트)
+#   error_type  RETRY | SKIP | STOP (원인 분류)         ← 라벨로 승격
+#   phase       READ | PROCESS | WRITE                 ← 라벨로 승격
+#   member_id, year, month, attempt, jobName, jobParam ← 라벨 X (카디널리티 폭증 회피)
+#                                                       LogQL `| json` 으로 ad-hoc 필터/추출
+# ─────────────────────────────────────────────────────────────────────
+
+scrape_configs:
+
+  # ── 운영 로그: app.log (INFO 전용) ───────────────────────────────
+  - job_name: hrguard-app
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: hrguard-app
+          log_type: business
+          __path__: /var/log/hrguard/app.log
+    pipeline_stages:
+      - json:
+          expressions:
+            log_tag: log_tag
+            error_code: error_code
+            error_type: error_type
+            phase: phase
+      - labels:
+          log_tag:
+          error_code:
+          error_type:
+          phase:
+
+  # ── 운영 로그: warn.log (WARN 전용) ──────────────────────────────
+  # [SKIP]  — 데이터 결함 등 정상 skip
+  # [RETRY] — chunk-level retry attempt
+  - job_name: hrguard-warn
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: hrguard-app
+          log_type: warn
+          __path__: /var/log/hrguard/warn.log
+    pipeline_stages:
+      - json:
+          expressions:
+            log_tag: log_tag
+            error_code: error_code
+            error_type: error_type
+            phase: phase
+      - labels:
+          log_tag:
+          error_code:
+          error_type:
+          phase:
+
+  # ── 운영 로그: error.log (ERROR 전용) ────────────────────────────
+  # [STOP] — SkipPolicy STOP 분기 / RETRY 소진 / Skip 한도 초과 / Job 실패 누적
+  - job_name: hrguard-error
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: hrguard-app
+          log_type: error
+          __path__: /var/log/hrguard/error.log
+    pipeline_stages:
+      - json:
+          expressions:
+            log_tag: log_tag
+            error_code: error_code
+            error_type: error_type
+            phase: phase
+      - labels:
+          log_tag:
+          error_code:
+          error_type:
+          phase:

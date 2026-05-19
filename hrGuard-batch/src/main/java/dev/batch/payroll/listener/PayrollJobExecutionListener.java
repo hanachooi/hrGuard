@@ -111,11 +111,17 @@ public class PayrollJobExecutionListener implements JobExecutionListener, ExitCo
 
         for (Throwable throwable : jobExecution.getAllFailureExceptions()) {
             Classification c = BatchErrorClassifier.classify(throwable);
-            log.error("[{}] {} | type={} | yearMonth={} | cause={}: {}",
-                    c.code(), c.message(), c.type(),
-                    yearMonth,
-                    c.cause().getClass().getSimpleName(), c.cause().getMessage(),
-                    throwable);
+            // log_tag=STOP (액션축) — error_type 은 원인축으로 그대로 노출.
+            // RETRY 소진 케이스도 여기서는 라벨 STOP / error_type=RETRY 어긋남이 보존된다.
+            try (var ignored1 = MDC.putCloseable("log_tag", "STOP");
+                 var ignored2 = MDC.putCloseable("error_code", c.code());
+                 var ignored3 = MDC.putCloseable("error_type", c.type().name())) {
+                log.error("{} | yearMonth={} | cause={}: {}",
+                        c.message(),
+                        yearMonth,
+                        c.cause().getClass().getSimpleName(), c.cause().getMessage(),
+                        throwable);
+            }
         }
 
         log.error("===== [payrollJob 비정상종료] status={}, yearMonth={}, 소요시간={}ms, exitCode=1 =====",

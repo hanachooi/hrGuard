@@ -1,0 +1,409 @@
+{
+  "title": "hrGuard - API 모니터링",
+  "uid": "hrguard-api",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "tags": ["api", "hrguard"],
+  "panels": [
+
+    {
+      "id": 1, "type": "row",
+      "title": "▶  HTTP 요청 현황",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 10, "type": "stat",
+      "title": "현재 RPS",
+      "description": "초당 요청 수 (/actuator 제외)",
+      "gridPos": { "x": 0, "y": 1, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        }
+      },
+      "targets": [{
+        "expr": "sum(rate(http_server_requests_seconds_count{job=\"hrguard-api\", uri!~\"/actuator.*\"}[$__rate_interval]))",
+        "legendFormat": "RPS", "refId": "A"
+      }]
+    },
+
+    {
+      "id": 11, "type": "stat",
+      "title": "평균 응답 시간",
+      "gridPos": { "x": 6, "y": 1, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.3 }, { "color": "red", "value": 1 }] }
+        }
+      },
+      "targets": [{
+        "expr": "sum(rate(http_server_requests_seconds_sum{job=\"hrguard-api\", uri!~\"/actuator.*\"}[$__rate_interval])) / sum(rate(http_server_requests_seconds_count{job=\"hrguard-api\", uri!~\"/actuator.*\"}[$__rate_interval]))",
+        "legendFormat": "avg", "refId": "A"
+      }]
+    },
+
+    {
+      "id": 12, "type": "stat",
+      "title": "p95 응답 시간",
+      "gridPos": { "x": 12, "y": 1, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.5 }, { "color": "red", "value": 2 }] }
+        }
+      },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{job=\"hrguard-api\", uri!~\"/actuator.*\"}[$__rate_interval])) by (le))",
+        "legendFormat": "p95", "refId": "A"
+      }]
+    },
+
+    {
+      "id": 13, "type": "stat",
+      "title": "5xx 에러율",
+      "description": "전체 요청 대비 5xx 비율. 1% 이상이면 즉시 확인.",
+      "gridPos": { "x": 18, "y": 1, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.1 }, { "color": "red", "value": 1 }] }
+        }
+      },
+      "targets": [{
+        "expr": "sum(rate(http_server_requests_seconds_count{job=\"hrguard-api\", status=~\"5..\", uri!~\"/actuator.*\"}[$__rate_interval])) / sum(rate(http_server_requests_seconds_count{job=\"hrguard-api\", uri!~\"/actuator.*\"}[$__rate_interval])) * 100",
+        "legendFormat": "5xx %", "refId": "A"
+      }]
+    },
+
+    {
+      "id": 14, "type": "timeseries",
+      "title": "RPS & 5xx 에러 추이",
+      "description": "에러 급증 시 배포·DB·외부 API 문제 우선 확인.",
+      "gridPos": { "x": 0, "y": 5, "w": 24, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "5xx 에러" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }, { "id": "custom.fillOpacity", "value": 30 }] }
+        ]
+      },
+      "targets": [
+        { "expr": "sum(rate(http_server_requests_seconds_count{job=\"hrguard-api\", uri!~\"/actuator.*\"}[$__rate_interval]))", "legendFormat": "전체 RPS", "refId": "A" },
+        { "expr": "sum(rate(http_server_requests_seconds_count{job=\"hrguard-api\", status=~\"5..\", uri!~\"/actuator.*\"}[$__rate_interval]))", "legendFormat": "5xx 에러", "refId": "B" },
+        { "expr": "sum(rate(http_server_requests_seconds_count{job=\"hrguard-api\", status=~\"4..\", uri!~\"/actuator.*\"}[$__rate_interval]))", "legendFormat": "4xx 클라이언트 오류", "refId": "C" }
+      ]
+    },
+
+    {
+      "id": 15, "type": "timeseries",
+      "title": "응답 시간 분포 (avg / p95 / p99)",
+      "description": "p99와 평균의 격차가 크면 일부 요청에서 극단적 지연 발생 중.",
+      "gridPos": { "x": 0, "y": 11, "w": 24, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 5 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "p99" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "p95" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }
+        ]
+      },
+      "targets": [
+        { "expr": "sum(rate(http_server_requests_seconds_sum{job=\"hrguard-api\", uri!~\"/actuator.*\"}[$__rate_interval])) / sum(rate(http_server_requests_seconds_count{job=\"hrguard-api\", uri!~\"/actuator.*\"}[$__rate_interval]))", "legendFormat": "avg", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{job=\"hrguard-api\", uri!~\"/actuator.*\"}[$__rate_interval])) by (le))", "legendFormat": "p95", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{job=\"hrguard-api\", uri!~\"/actuator.*\"}[$__rate_interval])) by (le))", "legendFormat": "p99", "refId": "C" }
+      ]
+    },
+
+    {
+      "id": 16, "type": "timeseries",
+      "title": "URI별 평균 응답 시간",
+      "description": "느린 엔드포인트를 특정. 상위 5개 URI만 표시하려면 Grafana Legend 필터 활용.",
+      "gridPos": { "x": 0, "y": 18, "w": 24, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 1 } } },
+      "targets": [{
+        "expr": "sum by (uri) (rate(http_server_requests_seconds_sum{job=\"hrguard-api\", uri!~\"/actuator.*\"}[$__rate_interval])) / sum by (uri) (rate(http_server_requests_seconds_count{job=\"hrguard-api\", uri!~\"/actuator.*\"}[$__rate_interval]))",
+        "legendFormat": "{{uri}}", "refId": "A"
+      }]
+    },
+
+    {
+      "id": 17, "type": "timeseries",
+      "title": "HTTP 상태 코드별 RPS",
+      "description": "2xx/3xx/4xx/5xx 분포로 전체 트래픽 건강도 파악.",
+      "gridPos": { "x": 0, "y": 25, "w": 24, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 8 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "5xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "4xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "2xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] }
+        ]
+      },
+      "targets": [
+        { "expr": "sum(rate(http_server_requests_seconds_count{job=\"hrguard-api\", status=~\"2..\", uri!~\"/actuator.*\"}[$__rate_interval]))", "legendFormat": "2xx", "refId": "A" },
+        { "expr": "sum(rate(http_server_requests_seconds_count{job=\"hrguard-api\", status=~\"4..\", uri!~\"/actuator.*\"}[$__rate_interval]))", "legendFormat": "4xx", "refId": "B" },
+        { "expr": "sum(rate(http_server_requests_seconds_count{job=\"hrguard-api\", status=~\"5..\", uri!~\"/actuator.*\"}[$__rate_interval]))", "legendFormat": "5xx", "refId": "C" }
+      ]
+    },
+
+
+    {
+      "id": 50, "type": "row",
+      "title": "▶  시스템 리소스",
+      "gridPos": { "x": 0, "y": 32, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 51, "type": "row",
+      "title": "JVM 메모리",
+      "gridPos": { "x": 0, "y": 33, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 52, "type": "timeseries",
+      "title": "Heap 사용량",
+      "gridPos": { "x": 0, "y": 34, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "lineWidth": 1, "fillOpacity": 20 } } },
+      "targets": [
+        { "expr": "jvm_memory_used_bytes{job=\"hrguard-api\", area=\"heap\"}", "legendFormat": "Heap 사용 ({{id}})", "refId": "A" },
+        { "expr": "jvm_memory_max_bytes{job=\"hrguard-api\", area=\"heap\"}", "legendFormat": "Heap 최대 ({{id}})", "refId": "B" }
+      ]
+    },
+
+    {
+      "id": 53, "type": "timeseries",
+      "title": "Non-Heap (Metaspace / Code Cache)",
+      "gridPos": { "x": 12, "y": 34, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "lineWidth": 1, "fillOpacity": 15 } } },
+      "targets": [
+        { "expr": "jvm_memory_used_bytes{job=\"hrguard-api\", area=\"nonheap\"}", "legendFormat": "Non-Heap 사용 ({{id}})", "refId": "A" },
+        { "expr": "jvm_memory_committed_bytes{job=\"hrguard-api\", area=\"nonheap\"}", "legendFormat": "Non-Heap Committed ({{id}})", "refId": "B" }
+      ]
+    },
+
+    {
+      "id": 60, "type": "row",
+      "title": "CPU & 스레드",
+      "gridPos": { "x": 0, "y": 40, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 61, "type": "timeseries",
+      "title": "CPU 사용률",
+      "gridPos": { "x": 0, "y": 41, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "custom": { "lineWidth": 2, "fillOpacity": 15 } } },
+      "targets": [
+        { "expr": "process_cpu_usage{job=\"hrguard-api\"}", "legendFormat": "Process CPU", "refId": "A" },
+        { "expr": "system_cpu_usage{job=\"hrguard-api\"}", "legendFormat": "System CPU", "refId": "B" }
+      ]
+    },
+
+    {
+      "id": 62, "type": "timeseries",
+      "title": "JVM 스레드 (Live / Daemon / Peak)",
+      "gridPos": { "x": 12, "y": 41, "w": 8, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2 } } },
+      "targets": [
+        { "expr": "jvm_threads_live_threads{job=\"hrguard-api\"}", "legendFormat": "Live", "refId": "A" },
+        { "expr": "jvm_threads_daemon_threads{job=\"hrguard-api\"}", "legendFormat": "Daemon", "refId": "B" },
+        { "expr": "jvm_threads_peak_threads{job=\"hrguard-api\"}", "legendFormat": "Peak", "refId": "C" }
+      ]
+    },
+
+    {
+      "id": 63, "type": "stat",
+      "title": "프로세스 가동 시간",
+      "gridPos": { "x": 20, "y": 41, "w": 4, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } } },
+      "targets": [{ "expr": "process_uptime_seconds{job=\"hrguard-api\"}", "legendFormat": "Uptime", "refId": "A" }]
+    },
+
+    {
+      "id": 70, "type": "row",
+      "title": "GC (Garbage Collection)",
+      "gridPos": { "x": 0, "y": 47, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 71, "type": "timeseries",
+      "title": "GC 일시 정지 시간",
+      "gridPos": { "x": 0, "y": 48, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 1, "fillOpacity": 10 } } },
+      "targets": [{ "expr": "rate(jvm_gc_pause_seconds_sum{job=\"hrguard-api\"}[$__rate_interval])", "legendFormat": "GC pause ({{action}}, {{cause}})", "refId": "A" }]
+    },
+
+    {
+      "id": 72, "type": "timeseries",
+      "title": "GC 발생 빈도",
+      "description": "급증 시 힙 압박 또는 메모리 누수 의심.",
+      "gridPos": { "x": 12, "y": 48, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "lineWidth": 1, "fillOpacity": 10 } } },
+      "targets": [{ "expr": "rate(jvm_gc_pause_seconds_count{job=\"hrguard-api\"}[$__rate_interval])", "legendFormat": "GC 횟수/s ({{action}})", "refId": "A" }]
+    },
+
+    {
+      "id": 80, "type": "row",
+      "title": "HikariCP 커넥션 풀",
+      "gridPos": { "x": 0, "y": 54, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 81, "type": "timeseries",
+      "title": "커넥션 풀 상태 (Active / Idle / Max / Pending)",
+      "description": "Pending 상승 = 풀 포화. Max에 Active가 달라붙으면 pool size 증설 필요.",
+      "gridPos": { "x": 0, "y": 55, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 2 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Pending" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Max" }, "properties": [{ "id": "custom.lineStyle", "value": { "dash": [8, 8], "fill": "dash" } }] }
+        ]
+      },
+      "targets": [
+        { "expr": "hikaricp_connections_active{job=\"hrguard-api\"}", "legendFormat": "Active ({{pool}})", "refId": "A" },
+        { "expr": "hikaricp_connections_idle{job=\"hrguard-api\"}", "legendFormat": "Idle ({{pool}})", "refId": "B" },
+        { "expr": "hikaricp_connections_max{job=\"hrguard-api\"}", "legendFormat": "Max ({{pool}})", "refId": "C" },
+        { "expr": "hikaricp_connections_pending{job=\"hrguard-api\"}", "legendFormat": "Pending ({{pool}})", "refId": "D" }
+      ]
+    },
+
+    {
+      "id": 82, "type": "timeseries",
+      "title": "커넥션 획득 대기 시간 (p50 / p95)",
+      "description": "API 서버에서 p95 > 50ms 이면 DB 부하 확인 필요.",
+      "gridPos": { "x": 12, "y": 55, "w": 8, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
+        "overrides": [{ "matcher": { "id": "byName", "options": "p95" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }]
+      },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, rate(hikaricp_connections_acquire_seconds_bucket{job=\"hrguard-api\"}[$__rate_interval]))", "legendFormat": "p95", "refId": "A" },
+        { "expr": "histogram_quantile(0.50, rate(hikaricp_connections_acquire_seconds_bucket{job=\"hrguard-api\"}[$__rate_interval]))", "legendFormat": "p50", "refId": "B" }
+      ]
+    },
+
+    {
+      "id": 83, "type": "stat",
+      "title": "커넥션 타임아웃 누적",
+      "gridPos": { "x": 20, "y": 55, "w": 4, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } },
+      "targets": [{ "expr": "hikaricp_connections_timeout_total{job=\"hrguard-api\"} or vector(0)", "legendFormat": "타임아웃", "refId": "A" }]
+    },
+
+    {
+      "id": 90, "type": "row",
+      "title": "▶  로그",
+      "gridPos": { "x": 0, "y": 62, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 91, "type": "logs",
+      "title": "운영 로그 — INFO (비즈니스 성공 이벤트)",
+      "description": "비즈니스 프로세스 정상 완료 이벤트. /actuator 제외.",
+      "gridPos": { "x": 0, "y": 63, "w": 24, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{job=\"hrguard-app\", log_type=\"business\"} !~ \"/actuator\"",
+        "legendFormat": "",
+        "refId": "A"
+      }]
+    },
+
+    {
+      "id": 94, "type": "logs",
+      "title": "경고 로그 — WARN (비정상 상황, 추후 분석)",
+      "description": "처리 지연, 권한 없는 접근 시도 등 시스템은 동작하지만 비정상 상황.",
+      "gridPos": { "x": 0, "y": 73, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{job=\"hrguard-app\", log_type=\"warn\"}",
+        "legendFormat": "",
+        "refId": "A"
+      }]
+    },
+
+    {
+      "id": 92, "type": "logs",
+      "title": "에러 로그 — ERROR (즉시 알람 대상)",
+      "description": "시스템 정상 동작 불가 상태. DB 연결 실패, 외부 API 타임아웃 등. 즉시 조치 필요.",
+      "gridPos": { "x": 0, "y": 81, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{job=\"hrguard-app\", log_type=\"error\"}",
+        "legendFormat": "",
+        "refId": "A"
+      }]
+    }
+
+  ]
+}

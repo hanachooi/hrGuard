@@ -1,0 +1,519 @@
+{
+  "title": "hrGuard - Payroll Batch 모니터링",
+  "uid": "hrguard-payroll-batch",
+  "schemaVersion": 38,
+  "version": 5,
+  "refresh": "5s",
+  "time": { "from": "now-1h", "to": "now" },
+  "tags": ["batch", "payroll", "hrguard"],
+  "panels": [
+
+    {
+      "id": 1, "type": "row",
+      "title": "▶  배치 지표",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 2, "type": "row",
+      "title": "Job 실행 현황",
+      "gridPos": { "x": 0, "y": 1, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 10, "type": "stat",
+      "title": "Job 총 실행 횟수",
+      "description": "성공 + 실패 합산",
+      "gridPos": { "x": 0, "y": 2, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } } },
+      "targets": [{ "expr": "sum(spring_batch_job_seconds_count{application=\"hrGuard\", name=\"payrollJob\"})", "legendFormat": "총 실행", "refId": "A" }]
+    },
+
+    {
+      "id": 11, "type": "stat",
+      "title": "Job 성공 횟수",
+      "gridPos": { "x": 6, "y": 2, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
+      "targets": [{ "expr": "sum(spring_batch_job_seconds_count{application=\"hrGuard\", name=\"payrollJob\", status=\"COMPLETED\"}) or vector(0)", "legendFormat": "성공", "refId": "A" }]
+    },
+
+    {
+      "id": 12, "type": "stat",
+      "title": "Job 실패 횟수",
+      "gridPos": { "x": 12, "y": 2, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } },
+      "targets": [{ "expr": "sum(spring_batch_job_seconds_count{application=\"hrGuard\", name=\"payrollJob\", status=\"FAILED\"}) or vector(0)", "legendFormat": "실패", "refId": "A" }]
+    },
+
+    {
+      "id": 13, "type": "stat",
+      "title": "최근 Job 평균 소요 시간",
+      "gridPos": { "x": 18, "y": 2, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 60 }, { "color": "red", "value": 300 }] } } },
+      "targets": [{ "expr": "spring_batch_job_seconds_sum{application=\"hrGuard\", name=\"payrollJob\", status=\"COMPLETED\"} / spring_batch_job_seconds_count{application=\"hrGuard\", name=\"payrollJob\", status=\"COMPLETED\"}", "legendFormat": "평균(s)", "refId": "A" }]
+    },
+
+    {
+      "id": 14, "type": "timeseries",
+      "title": "Job / Step 실행 시간 추이",
+      "description": "배치 실행마다의 소요 시간. 급격한 상승은 성능 회귀 신호.",
+      "gridPos": { "x": 0, "y": 6, "w": 24, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+      "targets": [
+        { "expr": "increase(spring_batch_job_seconds_sum{application=\"hrGuard\", name=\"payrollJob\"}[2m])", "legendFormat": "Job 실행 시간", "refId": "A" },
+        { "expr": "increase(spring_batch_step_seconds_sum{application=\"hrGuard\", name=\"payrollStep\"}[2m])", "legendFormat": "Step 실행 시간", "refId": "B" }
+      ]
+    },
+
+    {
+      "id": 20, "type": "row",
+      "title": "Chunk & 아이템 처리",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 23, "type": "gauge",
+      "title": "정산 성공률",
+      "description": "written / (written + filtered) × 100",
+      "gridPos": { "x": 0, "y": 13, "w": 8, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "minVizValue": 0, "maxVizValue": 100, "showThresholdLabels": true },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 85 }, { "color": "green", "value": 95 }] } } },
+      "targets": [{ "expr": "payroll_batch_items_written_total{application=\"hrGuard\"} / (payroll_batch_items_written_total{application=\"hrGuard\"} + payroll_batch_items_filtered_total{application=\"hrGuard\"}) * 100", "legendFormat": "성공률", "refId": "A" }]
+    },
+
+    {
+      "id": 24, "type": "stat",
+      "title": "아이템별 처리 현황 (누적)",
+      "gridPos": { "x": 8, "y": 13, "w": 16, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal", "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "읽기" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "저장" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "필터(skip)" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }
+        ]
+      },
+      "targets": [
+        { "expr": "payroll_batch_items_read_total{application=\"hrGuard\"}", "legendFormat": "읽기", "refId": "A" },
+        { "expr": "payroll_batch_items_written_total{application=\"hrGuard\"}", "legendFormat": "저장", "refId": "B" },
+        { "expr": "payroll_batch_items_filtered_total{application=\"hrGuard\"}", "legendFormat": "필터(skip)", "refId": "C" }
+      ]
+    },
+
+    {
+      "id": 25, "type": "timeseries",
+      "title": "처리 속도 (items/s) & 읽기-저장 갭",
+      "description": "갭이 벌어질수록 WorkSchedule 미등록 멤버 증가를 의미.",
+      "gridPos": { "x": 0, "y": 17, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
+        "overrides": [{ "matcher": { "id": "byName", "options": "갭(필터)" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }, { "id": "custom.fillOpacity", "value": 30 }] }]
+      },
+      "targets": [
+        { "expr": "rate(payroll_batch_items_read_total{application=\"hrGuard\"}[1m])", "legendFormat": "읽기", "refId": "A" },
+        { "expr": "rate(payroll_batch_items_written_total{application=\"hrGuard\"}[1m])", "legendFormat": "저장", "refId": "B" },
+        { "expr": "rate(payroll_batch_items_read_total{application=\"hrGuard\"}[1m]) - rate(payroll_batch_items_written_total{application=\"hrGuard\"}[1m])", "legendFormat": "갭(필터)", "refId": "C" }
+      ]
+    },
+
+    {
+      "id": 26, "type": "timeseries",
+      "title": "Chunk 커밋 / 롤백 속도",
+      "gridPos": { "x": 12, "y": 17, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
+        "overrides": [{ "matcher": { "id": "byName", "options": "롤백" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }]
+      },
+      "targets": [
+        { "expr": "rate(payroll_batch_chunks_total{application=\"hrGuard\", status=\"success\"}[1m])", "legendFormat": "커밋", "refId": "A" },
+        { "expr": "rate(payroll_batch_chunks_total{application=\"hrGuard\", status=\"error\"}[1m]) or vector(0)", "legendFormat": "롤백", "refId": "B" }
+      ]
+    },
+
+    {
+      "id": 30, "type": "row",
+      "title": "Skip & 재시도",
+      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 31, "type": "stat",
+      "title": "Skip 누적 (단계별)",
+      "description": "Read/Process/Write 단계별 skip 누적 수. 증가 추세는 데이터 품질 이슈 신호.",
+      "gridPos": { "x": 0, "y": 25, "w": 8, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal", "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 10 }] } } },
+      "targets": [
+        { "expr": "payroll_batch_skip_total{application=\"hrGuard\", phase=\"read\"} or vector(0)", "legendFormat": "Read", "refId": "A" },
+        { "expr": "payroll_batch_skip_total{application=\"hrGuard\", phase=\"process\"} or vector(0)", "legendFormat": "Process", "refId": "B" },
+        { "expr": "payroll_batch_skip_total{application=\"hrGuard\", phase=\"write\"} or vector(0)", "legendFormat": "Write", "refId": "C" }
+      ]
+    },
+
+    {
+      "id": 32, "type": "gauge",
+      "title": "Skip 비율",
+      "description": "전체 읽기 대비 skip 비율. 15% 초과 시 데이터 이상 의심.",
+      "gridPos": { "x": 8, "y": 25, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "minVizValue": 0, "maxVizValue": 100, "showThresholdLabels": true },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 15 }] } } },
+      "targets": [{ "expr": "sum(payroll_batch_skip_total{application=\"hrGuard\"}) / payroll_batch_items_read_total{application=\"hrGuard\"} * 100", "legendFormat": "Skip %", "refId": "A" }]
+    },
+
+    {
+      "id": 33, "type": "stat",
+      "title": "[RETRY] 횟수",
+      "gridPos": { "x": 12, "y": 25, "w": 3, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] } } },
+      "targets": [{ "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({job=\"hrguard-app\", log_tag=\"RETRY\"}[$__range]))", "refId": "A", "legendFormat": "RETRY" }]
+    },
+
+    {
+      "id": 34, "type": "stat",
+      "title": "[STOP] RETRY 소진",
+      "description": "chunk-level retry 한도 초과로 배치 중단된 건수. 0이 이상적. (라벨=STOP, error_type=RETRY 의 의도된 어긋남)",
+      "gridPos": { "x": 15, "y": 25, "w": 3, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } },
+      "targets": [{ "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({job=\"hrguard-app\", log_tag=\"STOP\", error_type=\"RETRY\"}[$__range]))", "refId": "A", "legendFormat": "RETRY 소진" }]
+    },
+
+    {
+      "id": 37, "type": "stat",
+      "title": "[SKIP] 건수",
+      "description": "skip 처리된 건수 (BatchException·데이터 결함·재시도 소진). 100건 초과 시 Job 강제 종료.",
+      "gridPos": { "x": 18, "y": 25, "w": 3, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 50 }] } } },
+      "targets": [{ "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({job=\"hrguard-app\", log_tag=\"SKIP\"}[$__range]))", "refId": "A", "legendFormat": "SKIP" }]
+    },
+
+    {
+      "id": 38, "type": "stat",
+      "title": "[STOP] 누적",
+      "description": "배치 중단 액션이 발생한 모든 건수 (분류=STOP + RETRY 소진 + Skip 한도 초과). 0이 이상적. 1 이상이면 즉시 error.log 확인.",
+      "gridPos": { "x": 21, "y": 25, "w": 3, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } },
+      "targets": [{ "datasource": { "type": "loki", "uid": "loki" }, "expr": "sum(count_over_time({job=\"hrguard-app\", log_tag=\"STOP\"}[$__range]))", "refId": "A", "legendFormat": "STOP" }]
+    },
+
+    {
+      "id": 35, "type": "timeseries",
+      "title": "Skip 속도 추이 (phase별)",
+      "description": "특정 phase에서 급증하면 즉시 확인 필요.",
+      "gridPos": { "x": 0, "y": 29, "w": 16, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+      "targets": [
+        { "expr": "rate(payroll_batch_skip_total{application=\"hrGuard\", phase=\"read\"}[1m])", "legendFormat": "Read skip/s", "refId": "A" },
+        { "expr": "rate(payroll_batch_skip_total{application=\"hrGuard\", phase=\"process\"}[1m])", "legendFormat": "Process skip/s", "refId": "B" },
+        { "expr": "rate(payroll_batch_skip_total{application=\"hrGuard\", phase=\"write\"}[1m])", "legendFormat": "Write skip/s", "refId": "C" }
+      ]
+    },
+
+    {
+      "id": 36, "type": "gauge",
+      "title": "Chunk 롤백 비율",
+      "description": "전체 청크 중 롤백 비율. 상승 시 TransientDataAccessException 반복 의심.",
+      "gridPos": { "x": 16, "y": 29, "w": 8, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "minVizValue": 0, "maxVizValue": 100, "showThresholdLabels": true },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] } } },
+      "targets": [{ "expr": "payroll_batch_chunks_total{application=\"hrGuard\", status=\"error\"} / (payroll_batch_chunks_total{application=\"hrGuard\", status=\"success\"} + payroll_batch_chunks_total{application=\"hrGuard\", status=\"error\"}) * 100", "legendFormat": "롤백%", "refId": "A" }]
+    },
+
+    {
+      "id": 50, "type": "row",
+      "title": "▶  시스템 리소스",
+      "gridPos": { "x": 0, "y": 36, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 51, "type": "row",
+      "title": "JVM 메모리",
+      "gridPos": { "x": 0, "y": 37, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 52, "type": "timeseries",
+      "title": "Heap 사용량",
+      "description": "OOM 위험을 사전에 감지합니다. 배치 실행 중 톱니 패턴이 정상.",
+      "gridPos": { "x": 0, "y": 38, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "lineWidth": 1, "fillOpacity": 20 } } },
+      "targets": [
+        { "expr": "jvm_memory_used_bytes{application=\"hrGuard\", area=\"heap\"}", "legendFormat": "Heap 사용 ({{id}})", "refId": "A" },
+        { "expr": "jvm_memory_max_bytes{application=\"hrGuard\", area=\"heap\"}", "legendFormat": "Heap 최대 ({{id}})", "refId": "B" }
+      ]
+    },
+
+    {
+      "id": 53, "type": "timeseries",
+      "title": "Non-Heap 사용량 (Metaspace / Code Cache)",
+      "description": "Metaspace 무한 증가 시 클래스 로딩 누수 의심. 배치에서는 거의 고정값.",
+      "gridPos": { "x": 12, "y": 38, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "lineWidth": 1, "fillOpacity": 15 } } },
+      "targets": [
+        { "expr": "jvm_memory_used_bytes{application=\"hrGuard\", area=\"nonheap\"}", "legendFormat": "Non-Heap 사용 ({{id}})", "refId": "A" },
+        { "expr": "jvm_memory_committed_bytes{application=\"hrGuard\", area=\"nonheap\"}", "legendFormat": "Non-Heap Committed ({{id}})", "refId": "B" }
+      ]
+    },
+
+    {
+      "id": 60, "type": "row",
+      "title": "CPU & 스레드",
+      "gridPos": { "x": 0, "y": 44, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 61, "type": "timeseries",
+      "title": "CPU 사용률",
+      "description": "배치 처리 중 CPU 부하. chunk_size 조정의 근거로 활용.",
+      "gridPos": { "x": 0, "y": 45, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "custom": { "lineWidth": 2, "fillOpacity": 15 } } },
+      "targets": [
+        { "expr": "process_cpu_usage{application=\"hrGuard\"}", "legendFormat": "Process CPU", "refId": "A" },
+        { "expr": "system_cpu_usage{application=\"hrGuard\"}", "legendFormat": "System CPU", "refId": "B" }
+      ]
+    },
+
+    {
+      "id": 62, "type": "timeseries",
+      "title": "JVM 스레드",
+      "description": "Live 스레드가 Peak에 근접하면 스레드 풀 포화 의심.",
+      "gridPos": { "x": 12, "y": 45, "w": 8, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2 } } },
+      "targets": [
+        { "expr": "jvm_threads_live_threads{application=\"hrGuard\"}", "legendFormat": "Live", "refId": "A" },
+        { "expr": "jvm_threads_daemon_threads{application=\"hrGuard\"}", "legendFormat": "Daemon", "refId": "B" },
+        { "expr": "jvm_threads_peak_threads{application=\"hrGuard\"}", "legendFormat": "Peak", "refId": "C" }
+      ]
+    },
+
+    {
+      "id": 63, "type": "stat",
+      "title": "프로세스 가동 시간",
+      "description": "예상치 못한 재시작 여부를 빠르게 확인.",
+      "gridPos": { "x": 20, "y": 45, "w": 4, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } } },
+      "targets": [{ "expr": "process_uptime_seconds{application=\"hrGuard\"}", "legendFormat": "Uptime", "refId": "A" }]
+    },
+
+    {
+      "id": 70, "type": "row",
+      "title": "GC (Garbage Collection)",
+      "gridPos": { "x": 0, "y": 51, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 71, "type": "timeseries",
+      "title": "GC 일시 정지 시간",
+      "description": "GC pause time. 배치 중 과도하면 청크 처리 속도 저하.",
+      "gridPos": { "x": 0, "y": 52, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 1, "fillOpacity": 10 } } },
+      "targets": [{ "expr": "rate(jvm_gc_pause_seconds_sum{application=\"hrGuard\"}[1m])", "legendFormat": "GC pause ({{action}}, {{cause}})", "refId": "A" }]
+    },
+
+    {
+      "id": 72, "type": "timeseries",
+      "title": "GC 발생 빈도",
+      "description": "분당 GC 횟수. 급증 시 힙 압박 신호. chunk_size 축소 또는 -Xmx 증설 검토.",
+      "gridPos": { "x": 12, "y": 52, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "lineWidth": 1, "fillOpacity": 10 } } },
+      "targets": [{ "expr": "rate(jvm_gc_pause_seconds_count{application=\"hrGuard\"}[1m])", "legendFormat": "GC 횟수/s ({{action}})", "refId": "A" }]
+    },
+
+    {
+      "id": 80, "type": "row",
+      "title": "HikariCP 커넥션 풀",
+      "gridPos": { "x": 0, "y": 58, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 81, "type": "timeseries",
+      "title": "커넥션 풀 상태 (Active / Idle / Max / Pending)",
+      "description": "Pending이 상승하면 풀 크기 증설 검토. Max를 항상 Active가 채우면 풀 포화.",
+      "gridPos": { "x": 0, "y": 59, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 2 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Pending" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Max" }, "properties": [{ "id": "custom.lineStyle", "value": { "dash": [8, 8], "fill": "dash" } }] }
+        ]
+      },
+      "targets": [
+        { "expr": "hikaricp_connections_active{application=\"hrGuard\"}", "legendFormat": "Active ({{pool}})", "refId": "A" },
+        { "expr": "hikaricp_connections_idle{application=\"hrGuard\"}", "legendFormat": "Idle ({{pool}})", "refId": "B" },
+        { "expr": "hikaricp_connections_max{application=\"hrGuard\"}", "legendFormat": "Max ({{pool}})", "refId": "C" },
+        { "expr": "hikaricp_connections_pending{application=\"hrGuard\"}", "legendFormat": "Pending ({{pool}})", "refId": "D" }
+      ]
+    },
+
+    {
+      "id": 82, "type": "timeseries",
+      "title": "커넥션 획득 대기 시간 (p50 / p95)",
+      "description": "p95 > 50ms 이면 풀 크기 증설 또는 chunk_size 축소 검토.",
+      "gridPos": { "x": 12, "y": 59, "w": 8, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
+        "overrides": [{ "matcher": { "id": "byName", "options": "p95" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }]
+      },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, rate(hikaricp_connections_acquire_seconds_bucket{application=\"hrGuard\"}[$__rate_interval]))", "legendFormat": "p95", "refId": "A" },
+        { "expr": "histogram_quantile(0.50, rate(hikaricp_connections_acquire_seconds_bucket{application=\"hrGuard\"}[$__rate_interval]))", "legendFormat": "p50", "refId": "B" }
+      ]
+    },
+
+    {
+      "id": 83, "type": "stat",
+      "title": "커넥션 타임아웃 누적",
+      "description": "커넥션 획득 실패 횟수. 1 이상이면 즉시 풀 설정 점검.",
+      "gridPos": { "x": 20, "y": 59, "w": 4, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } },
+      "targets": [{ "expr": "hikaricp_connections_timeout_total{application=\"hrGuard\"} or vector(0)", "legendFormat": "타임아웃", "refId": "A" }]
+    },
+
+    {
+      "id": 90, "type": "row",
+      "title": "▶  로그",
+      "gridPos": { "x": 0, "y": 66, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 93, "type": "timeseries",
+      "title": "[RETRY] 발생 빈도 (분당)",
+      "description": "분당 [RETRY] 로그 건수. 급증 시 DB 일시적 연결 불안정 또는 TransientDataAccessException 반복 의심.",
+      "gridPos": { "x": 0, "y": 67, "w": 24, "h": 7 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 20 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "재시도/분" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }
+        ]
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "sum(count_over_time({job=\"hrguard-app\", log_tag=\"RETRY\"}[1m]))",
+        "legendFormat": "재시도/분",
+        "refId": "A"
+      }]
+    },
+
+    {
+      "id": 91, "type": "logs",
+      "title": "운영 로그 — INFO (비즈니스 성공 이벤트)",
+      "description": "비즈니스 프로세스 정상 완료 이벤트. Job 시작/완료, Chunk 처리 결과 등. 라인 클릭 → 우측 Log Details 에서 모든 JSON 필드 펼침.",
+      "gridPos": { "x": 0, "y": 74, "w": 24, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{job=\"hrguard-app\", log_type=\"business\"} | json | line_format \"{{ if .jobName }}[{{ .jobName }}]{{ if .jobParam }}[{{ .jobParam }}]{{ end }} {{ end }}{{ .message }}\"",
+        "legendFormat": "",
+        "refId": "A"
+      }]
+    },
+
+    {
+      "id": 94, "type": "logs",
+      "title": "경고 로그 — WARN (비정상 상황, 추후 분석)",
+      "description": "처리 지연, 재시도([RETRY]), 데이터 결함([SKIP]) 등. 라인 클릭 → 우측 Log Details 에서 모든 MDC 필드 펼침.",
+      "gridPos": { "x": 0, "y": 84, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{job=\"hrguard-app\", log_type=\"warn\"} | json | line_format \"{{ if .log_tag }}[{{ .log_tag }}]{{ end }}{{ if .phase }}[{{ .phase }}]{{ end }} {{ .message }}{{ if .member_id }} (member_id={{ .member_id }}{{ if .year }}, {{ .year }}-{{ .month }}{{ end }}){{ end }}{{ if .attempt }} (attempt={{ .attempt }}){{ end }}{{ if .error_code }} [{{ .error_code }}]{{ end }}\"",
+        "legendFormat": "",
+        "refId": "A"
+      }]
+    },
+
+    {
+      "id": 92, "type": "logs",
+      "title": "에러 로그 — ERROR (즉시 알람 대상)",
+      "description": "[STOP] 배치 중단 / retry 소진 / skip 한도 초과 / DB 연결 실패 등. stack_trace 는 라인 클릭 → 우측 Log Details 에서 펼침.",
+      "gridPos": { "x": 0, "y": 92, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{job=\"hrguard-app\", log_type=\"error\"} | json | line_format \"{{ if .log_tag }}[{{ .log_tag }}]{{ end }}{{ if .error_code }}[{{ .error_code }}]{{ end }} {{ .message }}\"",
+        "legendFormat": "",
+        "refId": "A"
+      }]
+    }
+
+  ]
+}

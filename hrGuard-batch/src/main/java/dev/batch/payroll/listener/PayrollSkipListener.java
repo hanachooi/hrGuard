@@ -10,6 +10,7 @@ import dev.payroll.entity.MonthlyPayroll;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.batch.core.SkipListener;
 import org.springframework.stereotype.Component;
 
@@ -64,9 +65,14 @@ public class PayrollSkipListener implements SkipListener<PayrollInputDto, Monthl
     public void onSkipInRead(Throwable t) {
         skipReadCounter.increment();
         Classification c = BatchErrorClassifier.classify(t);
-        log.warn("[SKIP][READ] [{}] {} | cause={}: {}",
-                c.code(), c.message(),
-                c.cause().getClass().getSimpleName(), c.cause().getMessage());
+        try (var ignored1 = MDC.putCloseable("log_tag", "SKIP");
+             var ignored2 = MDC.putCloseable("error_code", c.code());
+             var ignored3 = MDC.putCloseable("error_type", c.type().name());
+             var ignored4 = MDC.putCloseable("phase", "READ")) {
+            log.warn("read skip — {} | cause={}: {}",
+                    c.message(),
+                    c.cause().getClass().getSimpleName(), c.cause().getMessage());
+        }
         saveErrorLog(null, null, null, "READ", c, null);
     }
 
@@ -80,8 +86,15 @@ public class PayrollSkipListener implements SkipListener<PayrollInputDto, Monthl
         int year      = item.year();
         int month     = item.month();
 
-        log.warn("[SKIP][PROCESS] memberId={} | {}년{}월 | [{}] {}",
-                memberId, year, month, c.code(), c.message());
+        try (var ignored1 = MDC.putCloseable("log_tag", "SKIP");
+             var ignored2 = MDC.putCloseable("error_code", c.code());
+             var ignored3 = MDC.putCloseable("error_type", c.type().name());
+             var ignored4 = MDC.putCloseable("phase", "PROCESS");
+             var ignored5 = MDC.putCloseable("member_id", String.valueOf(memberId));
+             var ignored6 = MDC.putCloseable("year", String.valueOf(year));
+             var ignored7 = MDC.putCloseable("month", String.valueOf(month))) {
+            log.warn("process skip — {}", c.message());
+        }
         saveErrorLog(memberId, year, month, "PROCESS", c, toJson(item));
     }
 
@@ -95,9 +108,17 @@ public class PayrollSkipListener implements SkipListener<PayrollInputDto, Monthl
         int year      = item.getYear();
         int month     = item.getMonth();
 
-        log.warn("[SKIP][WRITE] memberId={} | {}년{}월 | [{}] {} | cause={}: {}",
-                memberId, year, month, c.code(), c.message(),
-                c.cause().getClass().getSimpleName(), c.cause().getMessage(), t);
+        try (var ignored1 = MDC.putCloseable("log_tag", "SKIP");
+             var ignored2 = MDC.putCloseable("error_code", c.code());
+             var ignored3 = MDC.putCloseable("error_type", c.type().name());
+             var ignored4 = MDC.putCloseable("phase", "WRITE");
+             var ignored5 = MDC.putCloseable("member_id", String.valueOf(memberId));
+             var ignored6 = MDC.putCloseable("year", String.valueOf(year));
+             var ignored7 = MDC.putCloseable("month", String.valueOf(month))) {
+            log.warn("write skip — {} | cause={}: {}",
+                    c.message(),
+                    c.cause().getClass().getSimpleName(), c.cause().getMessage(), t);
+        }
         saveErrorLog(memberId, year, month, "WRITE", c, toJson(item));
     }
 
@@ -116,8 +137,10 @@ public class PayrollSkipListener implements SkipListener<PayrollInputDto, Monthl
         try {
             return objectMapper.writeValueAsString(item);
         } catch (JsonProcessingException e) {
-            log.warn("[SKIP] 원본 데이터 JSON 직렬화 실패 — type={} cause={}",
-                    item.getClass().getSimpleName(), e.getMessage());
+            try (var ignored = MDC.putCloseable("log_tag", "SKIP")) {
+                log.warn("원본 데이터 JSON 직렬화 실패 — type={} cause={}",
+                        item.getClass().getSimpleName(), e.getMessage());
+            }
             return "{\"_serializationError\":\"" + e.getMessage().replace("\"", "'") + "\"}";
         }
     }
