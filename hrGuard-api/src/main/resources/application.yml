@@ -1,0 +1,62 @@
+spring:
+  application:
+    name: hrGuard
+  profiles:
+    active: dev
+
+  datasource:
+    domain:
+      hikari:
+        pool-name: hrguard-domain
+        driver-class-name: com.mysql.cj.jdbc.Driver
+        jdbc-url: jdbc:mysql://${DB_HOST:localhost}:3306/${DOMAIN_DB:autohrm}?useSSL=false&useUnicode=true&serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true
+        username: ${DB_USERNAME:root}
+        password: ${DB_PASSWORD:1234}
+        auto-commit: false
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        show_sql: true
+        format_sql: true
+        use_sql_comments: true
+    open-in-view: false
+
+jwt:
+  secret: ${JWT_SECRET:Y291cG9uLXN5c3RlbS1zZWNyZXQta2V5LWZvci1qd3QtdG9rZW4tZ2VuZXJhdGlvbi0yMDI0}
+
+api:
+  key: ${API_KEY:dev-external-api-key-1234}
+
+holiday:
+  api:
+    service-key: ${HOLIDAY_API_KEY:}
+
+logging:
+  level:
+    root: INFO
+    org:
+      hibernate:
+        type:
+          descriptor.sql: trace
+    com:
+      amazonaws:
+        util:
+          EC2MetadataUtils: error
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
