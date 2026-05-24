@@ -95,7 +95,7 @@ public class PayrollSkipListener implements SkipListener<PayrollInputDto, Monthl
              var ignored7 = MDC.putCloseable("month", String.valueOf(month))) {
             log.warn("process skip — {}", c.message());
         }
-        saveErrorLog(memberId, year, month, "PROCESS", c, toJson(item));
+        saveErrorLog(memberId, year, month, "PROCESS", c, null);
     }
 
     // ── Writer skip ──────────────────────────────────────────────────────────
@@ -137,10 +137,8 @@ public class PayrollSkipListener implements SkipListener<PayrollInputDto, Monthl
         try {
             return objectMapper.writeValueAsString(item);
         } catch (JsonProcessingException e) {
-            try (var ignored = MDC.putCloseable("log_tag", "SKIP")) {
-                log.warn("원본 데이터 JSON 직렬화 실패 — type={} cause={}",
-                        item.getClass().getSimpleName(), e.getMessage());
-            }
+            log.warn("원본 데이터 JSON 직렬화 실패 — type={} cause={}",
+                    item.getClass().getSimpleName(), e.getMessage());
             return "{\"_serializationError\":\"" + e.getMessage().replace("\"", "'") + "\"}";
         }
     }

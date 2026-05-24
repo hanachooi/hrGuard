@@ -7,6 +7,7 @@ import dev.payroll.service.InsuranceCalculator;
 import dev.payroll.service.TaxCalculator;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.batch.core.BatchStatus;
@@ -42,6 +43,8 @@ public class PayrollJobExecutionListener implements JobExecutionListener, ExitCo
 
     private final Counter jobSuccessCounter;
     private final Counter jobFailureCounter;
+    private final Timer jobSuccessTimer;
+    private final Timer jobFailureTimer;
     private final InsuranceCalculator insuranceCalculator;
     private final TaxCalculator taxCalculator;
 
@@ -55,6 +58,14 @@ public class PayrollJobExecutionListener implements JobExecutionListener, ExitCo
         this.jobFailureCounter = Counter.builder("payroll.batch.job")
                 .tag("status", "failure")
                 .description("Payroll batch job 실패 횟수")
+                .register(meterRegistry);
+        this.jobSuccessTimer = Timer.builder("payroll.batch.job.duration")
+                .tag("status", "success")
+                .description("Payroll batch job 성공 소요 시간")
+                .register(meterRegistry);
+        this.jobFailureTimer = Timer.builder("payroll.batch.job.duration")
+                .tag("status", "failure")
+                .description("Payroll batch job 실패 소요 시간")
                 .register(meterRegistry);
         this.insuranceCalculator = insuranceCalculator;
         this.taxCalculator = taxCalculator;
@@ -73,11 +84,11 @@ public class PayrollJobExecutionListener implements JobExecutionListener, ExitCo
 
         LocalDate payrollDate = YearMonth.parse(yearMonth).atDay(1);
         insuranceCalculator.load(payrollDate);
-        log.info("4대보험 요율 메모리 적재 완료 (기준일={})", payrollDate);
+        log.debug("4대보험 요율 메모리 적재 완료 (기준일={})", payrollDate);
         taxCalculator.load(payrollDate);
-        log.info("간이세액표 메모리 적재 완료 (기준일={})", payrollDate);
+        log.debug("간이세액표 메모리 적재 완료 (기준일={})", payrollDate);
 
-        log.info("===== [payrollJob 시작] yearMonth={}, jobId={} =====",
+        log.info("===== [급여 정산 시작] yearMonth={}, jobId={} =====",
                 yearMonth,
                 jobExecution.getJobId());
     }
@@ -88,9 +99,9 @@ public class PayrollJobExecutionListener implements JobExecutionListener, ExitCo
     public void afterJob(JobExecution jobExecution) {
       try {
         insuranceCalculator.clear();
-        log.info("4대보험 요율 메모리 해제 완료");
+        log.debug("4대보험 요율 메모리 해제 완료");
         taxCalculator.clear();
-        log.info("간이세액표 메모리 해제 완료");
+        log.debug("간이세액표 메모리 해제 완료");
 
         Duration elapsed = Duration.between(
                 jobExecution.getStartTime(), jobExecution.getEndTime());
@@ -98,21 +109,21 @@ public class PayrollJobExecutionListener implements JobExecutionListener, ExitCo
 
         if (jobExecution.getStatus() == BatchStatus.COMPLETED) {
             jobSuccessCounter.increment();
+            jobSuccessTimer.record(elapsed);
             long skipTotal = totalSkipCount(jobExecution);
             this.exitCode = skipTotal > 0 ? 2 : 0;
-            log.info("===== [payrollJob 완료] yearMonth={}, 소요시간={}ms, skip={}건, exitCode={} =====",
+            log.info("===== [급여 정산 완료] yearMonth={}, 소요시간={}ms, skip={}건, exitCode={} =====",
                     yearMonth, elapsed.toMillis(), skipTotal, this.exitCode);
             return;
         }
 
         // ── 실패 케이스 : 원인 분석 ─────────────────────────────────────────
         jobFailureCounter.increment();
+        jobFailureTimer.record(elapsed);
         this.exitCode = 1;
 
         for (Throwable throwable : jobExecution.getAllFailureExceptions()) {
             Classification c = BatchErrorClassifier.classify(throwable);
-            // log_tag=STOP (액션축) — error_type 은 원인축으로 그대로 노출.
-            // RETRY 소진 케이스도 여기서는 라벨 STOP / error_type=RETRY 어긋남이 보존된다.
             try (var ignored1 = MDC.putCloseable("log_tag", "STOP");
                  var ignored2 = MDC.putCloseable("error_code", c.code());
                  var ignored3 = MDC.putCloseable("error_type", c.type().name())) {
@@ -124,7 +135,7 @@ public class PayrollJobExecutionListener implements JobExecutionListener, ExitCo
             }
         }
 
-        log.error("===== [payrollJob 비정상종료] status={}, yearMonth={}, 소요시간={}ms, exitCode=1 =====",
+        log.error("===== [급여 정산 비정상종료] status={}, yearMonth={}, 소요시간={}ms, exitCode=1 =====",
                 jobExecution.getStatus(), yearMonth, elapsed.toMillis());
       } finally {
           MDC.clear();

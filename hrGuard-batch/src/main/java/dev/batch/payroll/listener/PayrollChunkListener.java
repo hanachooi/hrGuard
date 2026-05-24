@@ -1,10 +1,15 @@
 package dev.batch.payroll.listener;
 
+import dev.batch.common.exception.BatchErrorClassifier;
+import dev.batch.common.exception.BatchErrorClassifier.Classification;
+import dev.batch.common.exception.BatchErrorType;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.batch.core.ChunkListener;
 import org.springframework.batch.core.ExitStatus;
 import org.springframework.batch.core.StepExecution;
@@ -14,6 +19,7 @@ import org.springframework.stereotype.Component;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -49,6 +55,7 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
     private final Counter itemsWrittenCounter;
     private final Counter itemsFilteredCounter;
     private final Counter commuteSkippedCounter;
+    private final Timer stepDurationTimer;
 
     /**
      * Step 실행 단위로 퇴근 미기록 건수를 추적 (Singleton이므로 beforeStep에서 리셋)
@@ -88,6 +95,9 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
         this.commuteSkippedCounter = Counter.builder("payroll.batch.commute.skipped")
                 .description("퇴근 미기록으로 정산에서 제외된 출퇴근 건수")
                 .register(registry);
+        this.stepDurationTimer = Timer.builder("payroll.batch.step.duration")
+                .description("payrollStep 소요 시간")
+                .register(registry);
     }
 
     // ── StepExecutionListener ────────────────────────────────────────────────
@@ -102,6 +112,9 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
 
     @Override
     public ExitStatus afterStep(StepExecution stepExecution) {
+        if (stepExecution.getStartTime() != null && stepExecution.getEndTime() != null) {
+            stepDurationTimer.record(Duration.between(stepExecution.getStartTime(), stepExecution.getEndTime()));
+        }
         return stepExecution.getExitStatus();
     }
 
@@ -118,8 +131,7 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
 
     /**
      * 청크 처리 시작 전 호출.
-     * 직전 청크까지의 누적 카운터를 DEBUG로 남기고, chunk 진입 시점 heap 을 INFO 로 남깁니다.
-     * <p>이 값과 afterChunk 의 heap 값을 비교해 톱니 패턴(누적 → 회수)을 관찰합니다.</p>
+     * chunk 단위 반복 로그라 운영 시 노이즈 → DEBUG. 메모리 추적은 dev.batch.heap logger.
      */
     @Override
     public void beforeChunk(ChunkContext context) {
@@ -128,7 +140,7 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
         long prev = prevAfterChunkHeapMb.get();
         long delta = prev < 0 ? 0 : heapMb - prev;
 
-        log.info("[Chunk #{} 시작] heap={}MB (직전 afterChunk 대비 {}{}MB) — DTO 누적 시작",
+        log.debug("[Chunk #{} 시작] heap={}MB (직전 afterChunk 대비 {}{}MB) — DTO 누적 시작",
                 se.getCommitCount() + 1, heapMb,
                 delta >= 0 ? "+" : "", delta);
         heapLog.info("[HEAP] CHUNK_BEFORE chunk={} heap_mb={}", se.getCommitCount() + 1, heapMb);
@@ -179,7 +191,8 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
         heapLog.info("[HEAP] CHUNK_AFTER  chunk={} read={} written={} heap_mb={}",
                 se.getCommitCount(), se.getReadCount(), se.getWriteCount(), heapMb);
 
-        log.info("[Chunk #{} 완료] 읽기={} | 저장={} | 필터(skip)={} | 롤백={} | 정산성공률={}% | heap={}MB",
+        // chunk 단위 반복 로그 → 운영 시 노이즈. 카운터/처리속도는 Micrometer (payroll.batch.*) 로 노출.
+        log.debug("[Chunk #{} 완료] 읽기={} | 저장={} | 필터(skip)={} | 롤백={} | 정산성공률={}% | heap={}MB",
                 se.getCommitCount(),
                 se.getReadCount(),
                 se.getWriteCount(),
@@ -189,7 +202,7 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
                 heapMb);
 
         // chunk 버퍼(inputs/outputs) 참조 해제 시점 — 다음 chunk 진입 전까지 GC 대상
-        log.info("[Chunk #{}] write/commit 완료 → chunk 버퍼의 PayrollInputDto {}개 + MonthlyPayroll {}개 참조 해제 (GC 대상)",
+        log.debug("[Chunk #{}] write/commit 완료 → chunk 버퍼의 PayrollInputDto {}개 + MonthlyPayroll {}개 참조 해제 (GC 대상)",
                 se.getCommitCount(), chunkRead, chunkWritten + chunkFiltered);
     }
 
@@ -199,6 +212,10 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
 
     /**
      * 청크 처리 중 예외 발생(롤백) 후 호출.
+     *
+     * <p>SKIP / RETRY 분류의 정상 흐름 (chunk rollback 후 scan 모드 진입 또는 재시도) 도
+     * 여기로 들어오므로 분류기 결과에 따라 레벨을 분기한다 — STOP 만 ERROR, 나머지는 WARN.
+     * (실제 STOP 라벨링은 SkipPolicy / JobExecutionListener 가 단일 진입점으로 담당)</p>
      */
     @Override
     public void afterChunkError(ChunkContext context) {
@@ -207,12 +224,35 @@ public class PayrollChunkListener implements ChunkListener, StepExecutionListene
 
         chunkErrorCounter.increment();
 
-        log.error("[Chunk #{} 롤백] 읽기={} | 저장={} | 누적롤백={} | 원인={}",
-                se.getCommitCount() + 1,
-                se.getReadCount(),
-                se.getWriteCount(),
-                se.getRollbackCount(),
-                error != null ? error.getMessage() : "unknown");
+        BatchErrorType type = error != null
+                ? BatchErrorClassifier.classify(error).type()
+                : BatchErrorType.STOP;
+        Classification c = error != null ? BatchErrorClassifier.classify(error) : null;
+
+        String causeMsg = error != null ? error.getMessage() : "unknown";
+
+        try (var ignored1 = MDC.putCloseable("phase", "CHUNK");
+             var ignored2 = c != null ? MDC.putCloseable("error_code", c.code()) : null;
+             var ignored3 = c != null ? MDC.putCloseable("error_type", c.type().name()) : null) {
+            if (type == BatchErrorType.STOP) {
+                log.error("[Chunk #{} 롤백] 읽기={} | 저장={} | 누적롤백={} | 원인={}",
+                        se.getCommitCount() + 1,
+                        se.getReadCount(),
+                        se.getWriteCount(),
+                        se.getRollbackCount(),
+                        causeMsg);
+            } else {
+                // SKIP / RETRY 케이스 — 정상 fault-tolerant 흐름, WARN 으로 강등.
+                // 실제 [SKIP] / [RETRY] / [STOP] 라벨링은 SkipPolicy / SkipListener /
+                // RetryListener / JobExecutionListener 가 담당.
+                log.warn("[Chunk #{} 롤백] 읽기={} | 저장={} | 누적롤백={} | 원인={}",
+                        se.getCommitCount() + 1,
+                        se.getReadCount(),
+                        se.getWriteCount(),
+                        se.getRollbackCount(),
+                        causeMsg);
+            }
+        }
     }
 
     private Object getOrDefault(ChunkContext context, String key, Object defaultValue) {

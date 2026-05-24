@@ -163,9 +163,12 @@ public class PayrollStepConfig {
 
             @Override
             public ExitStatus afterStep(StepExecution stepExecution) {
-                long totalProcessed = stepExecution.getWriteCount() + stepExecution.getFilterCount();
-                String successRate = totalProcessed > 0
-                        ? String.format("%.1f", (double) stepExecution.getWriteCount() / totalProcessed * 100.0)
+                long skipTotal = stepExecution.getReadSkipCount()
+                              + stepExecution.getProcessSkipCount()
+                              + stepExecution.getWriteSkipCount();
+                long readTotal = stepExecution.getReadCount();
+                String successRate = readTotal > 0
+                        ? String.format("%.1f", (double) stepExecution.getWriteCount() / readTotal * 100.0)
                         : "0.0";
 
                 log.info("""
@@ -174,16 +177,19 @@ public class PayrollStepConfig {
                                   처리 청크 수    : {} 건  (트랜잭션 커밋 {}회)
                                   읽은 인원       : {} 명
                                   정산 완료       : {} 명
-                                  멤버 skip       : {} 명  (스케줄 없음)
+                                  skip (DLT)      : {} 명  (read={}, process={}, write={})
                                   롤백            : {} 회
-                                  정산 성공률     : {}%
+                                  정산 성공률     : {}%  (write / read)
                                 ===============================""",
                         stepExecution.getStatus(),
                         stepExecution.getCommitCount(),
                         stepExecution.getCommitCount(),
-                        stepExecution.getReadCount(),
+                        readTotal,
                         stepExecution.getWriteCount(),
-                        stepExecution.getFilterCount(),
+                        skipTotal,
+                        stepExecution.getReadSkipCount(),
+                        stepExecution.getProcessSkipCount(),
+                        stepExecution.getWriteSkipCount(),
                         stepExecution.getRollbackCount(),
                         successRate
                 );
@@ -291,7 +297,8 @@ public class PayrollStepConfig {
 
                 long queryMs = (System.nanoTime() - queryStart) / 1_000_000;
                 long heapMb = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed() / (1024 * 1024);
-                log.info("[Reader] IN절 조회 완료 — memberIds={}건, schedule={}건, policy={}건, records={}건, 조회={}ms",
+                // chunk 단위 반복 로그 → 운영 시 노이즈. DEBUG 강등.
+                log.debug("[Reader] IN절 조회 완료 — memberIds={}건, schedule={}건, policy={}건, records={}건, 조회={}ms",
                         memberIds.size(), scheduleMap.size(), policyMap.size(),
                         recordsMap.values().stream().mapToInt(List::size).sum(), queryMs);
                 heapLog.info("[HEAP] READER_END   total={} heap_mb={}", dtoCreatedTotal.get(), heapMb);
@@ -323,13 +330,13 @@ public class PayrollStepConfig {
         return input -> {
             Long memberId = input.memberId();
 
+            // 데이터 누락 케이스 두 종류 모두 SKIP 정책 — throw 만 하고 SkipListener 가
+            // [SKIP][PROCESS] WARN + DLT 적재까지 단일 진입점으로 처리.
+            // (이전엔 WorkSchedule 만 filter (return null) 로 흘려서 DLT 추적이 안 됐음)
             if (input.workSchedule() == null) {
-                log.warn("WorkSchedule 없음, skip: memberId={}", memberId);
-                return null;
+                throw new BatchException(PayrollBatchErrorCode.WORK_SCHEDULE_NOT_FOUND);
             }
             if (input.payrollPolicy() == null) {
-                // throw 만 하고 사전 로깅 X — type=SKIP 이므로 SkipListener 가
-                // [SKIP][PROCESS] WARN + DLT 적재의 단일 진입점.
                 throw new BatchException(PayrollBatchErrorCode.PAYROLL_POLICY_NOT_FOUND);
             }
 
@@ -384,20 +391,8 @@ public class PayrollStepConfig {
                     .orElse(0.0);
             boolean overtimeLimitExceeded = maxWeeklyOvertime > WEEKLY_OVERTIME_LIMIT;
 
-            if (overtimeLimitExceeded) {
-                log.warn("주 52시간 한도 초과: memberId={}, {}년 {}월, 최대 주간연장={}h (한도 {}h)",
-                        memberId, ym.getYear(), ym.getMonthValue(),
-                        String.format("%.1f", maxWeeklyOvertime), WEEKLY_OVERTIME_LIMIT);
-                weeklyOvertimeMap.forEach((week, hours) -> {
-                    if (hours > WEEKLY_OVERTIME_LIMIT) {
-                        log.warn("  └ {}주차: 연장 {}h (초과분 {}h)",
-                                week,
-                                String.format("%.1f", hours),
-                                String.format("%.1f", hours - WEEKLY_OVERTIME_LIMIT));
-                    }
-                });
-            }
-
+            // 한도 초과 사실은 MonthlyPayroll.overtimeLimitExceeded / maxWeeklyOvertimeHours 컬럼에
+            // 저장되어 DB 쿼리로 조회 가능 → 로그 emit 불필요.
             payroll.updateOvertimeCheck(overtimeLimitExceeded, maxWeeklyOvertime);
 
             // ── 총 지급액 ─────────────────────────────────────────────────────
@@ -493,7 +488,8 @@ public class PayrollStepConfig {
         }
 
         long totalMs = (System.nanoTime() - t0) / 1_000_000;
-        log.info("[Writer] chunk={}건 {}년{}월 총={}ms (select={}ms, delete={}ms[existing={}건], insertPayroll={}ms, insertItem={}ms[items={}건])",
+        // chunk 단위 반복 + 쿼리 분해 → 운영 시 노이즈. DEBUG 강등. 성능 추적은 Micrometer Timer 로 별도.
+        log.debug("[Writer] chunk={}건 {}년{}월 총={}ms (select={}ms, delete={}ms[existing={}건], insertPayroll={}ms, insertItem={}ms[items={}건])",
                 itemCount, year, month, totalMs,
                 selectMs, deleteMs, existingIds.size(),
                 insertParentMs, insertItemMs, allItems.size());
