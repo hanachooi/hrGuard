@@ -2,7 +2,7 @@
   "title": "hrGuard - API 모니터링",
   "uid": "hrguard-api",
   "schemaVersion": 38,
-  "version": 1,
+  "version": 6,
   "refresh": "10s",
   "time": { "from": "now-1h", "to": "now" },
   "tags": ["api", "hrguard"],
@@ -25,7 +25,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#8AB8FF", "value": null }] }
         }
       },
       "targets": [{
@@ -43,7 +43,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.3 }, { "color": "red", "value": 1 }] }
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#3274D9", "value": null }, { "color": "#E0B400", "value": 0.3 }, { "color": "#E02F44", "value": 1 }] }
         }
       },
       "targets": [{
@@ -61,7 +61,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.5 }, { "color": "red", "value": 2 }] }
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#3274D9", "value": null }, { "color": "#E0B400", "value": 0.5 }, { "color": "#E02F44", "value": 2 }] }
         }
       },
       "targets": [{
@@ -80,7 +80,8 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.1 }, { "color": "red", "value": 1 }] }
+          "noValue": "0",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "#3274D9", "value": null }, { "color": "#E0B400", "value": 0.1 }, { "color": "#E02F44", "value": 1 }] }
         }
       },
       "targets": [{
@@ -99,7 +100,7 @@
         "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
         "overrides": [
           { "matcher": { "id": "byName", "options": "5xx 에러" },
-            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }, { "id": "custom.fillOpacity", "value": 30 }] }
+            "properties": [{ "id": "color", "value": { "fixedColor": "#E02F44", "mode": "fixed" } }, { "id": "custom.fillOpacity", "value": 30 }] }
         ]
       },
       "targets": [
@@ -119,9 +120,9 @@
         "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 5 } },
         "overrides": [
           { "matcher": { "id": "byName", "options": "p99" },
-            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#E02F44", "mode": "fixed" } }] },
           { "matcher": { "id": "byName", "options": "p95" },
-            "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }
+            "properties": [{ "id": "color", "value": { "fixedColor": "#E0B400", "mode": "fixed" } }] }
         ]
       },
       "targets": [
@@ -153,9 +154,9 @@
       "fieldConfig": {
         "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 8 } },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "5xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
-          { "matcher": { "id": "byName", "options": "4xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
-          { "matcher": { "id": "byName", "options": "2xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] }
+          { "matcher": { "id": "byName", "options": "5xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "#E02F44", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "4xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "#E0B400", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "2xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "#3274D9", "mode": "fixed" } }] }
         ]
       },
       "targets": [
@@ -183,6 +184,7 @@
     {
       "id": 52, "type": "timeseries",
       "title": "Heap 사용량",
+      "description": "OOM 위험을 사전에 감지합니다. 트래픽 급증 시 Used가 Max에 가까워지면 -Xmx 증설 또는 누수 점검.",
       "gridPos": { "x": 0, "y": 34, "w": 12, "h": 6 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "lineWidth": 1, "fillOpacity": 20 } } },
@@ -194,7 +196,8 @@
 
     {
       "id": 53, "type": "timeseries",
-      "title": "Non-Heap (Metaspace / Code Cache)",
+      "title": "Non-Heap 사용량 (Metaspace / Code Cache)",
+      "description": "Metaspace 무한 증가 시 클래스 로딩 누수 의심. 정상 운영 중에는 거의 고정값.",
       "gridPos": { "x": 12, "y": 34, "w": 12, "h": 6 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "lineWidth": 1, "fillOpacity": 15 } } },
@@ -214,6 +217,7 @@
     {
       "id": 61, "type": "timeseries",
       "title": "CPU 사용률",
+      "description": "트래픽 급증 시 CPU 부하 확인. Process CPU가 System CPU 대비 높으면 애플리케이션 병목.",
       "gridPos": { "x": 0, "y": 41, "w": 12, "h": 6 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "custom": { "lineWidth": 2, "fillOpacity": 15 } } },
@@ -225,7 +229,8 @@
 
     {
       "id": 62, "type": "timeseries",
-      "title": "JVM 스레드 (Live / Daemon / Peak)",
+      "title": "JVM 스레드",
+      "description": "Live 스레드가 Peak에 근접하면 스레드 풀 포화 의심. 요청 처리 지연과 함께 나타나면 thread pool 크기 조정 검토.",
       "gridPos": { "x": 12, "y": 41, "w": 8, "h": 6 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2 } } },
@@ -239,10 +244,11 @@
     {
       "id": 63, "type": "stat",
       "title": "프로세스 가동 시간",
+      "description": "예상치 못한 재시작 여부를 빠르게 확인.",
       "gridPos": { "x": 20, "y": 41, "w": 4, "h": 6 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
-      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } } },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [{ "color": "#8AB8FF", "value": null }] } } },
       "targets": [{ "expr": "process_uptime_seconds{job=\"hrguard-api\"}", "legendFormat": "Uptime", "refId": "A" }]
     },
 
@@ -256,26 +262,47 @@
     {
       "id": 71, "type": "timeseries",
       "title": "GC 일시 정지 시간",
+      "description": "GC pause time. 요청 처리 중 spike가 생기면 응답 지연 원인.",
       "gridPos": { "x": 0, "y": 48, "w": 12, "h": 6 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 1, "fillOpacity": 10 } } },
-      "targets": [{ "expr": "rate(jvm_gc_pause_seconds_sum{job=\"hrguard-api\"}[$__rate_interval])", "legendFormat": "GC pause ({{action}}, {{cause}})", "refId": "A" }]
+      "targets": [{ "expr": "rate(jvm_gc_pause_seconds_sum{job=\"hrguard-api\"}[1m])", "legendFormat": "GC pause ({{action}}, {{cause}})", "refId": "A" }]
     },
 
     {
       "id": 72, "type": "timeseries",
       "title": "GC 발생 빈도",
-      "description": "급증 시 힙 압박 또는 메모리 누수 의심.",
+      "description": "분당 GC 횟수. 급증 시 힙 압박 신호.",
       "gridPos": { "x": 12, "y": 48, "w": 12, "h": 6 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "ops", "custom": { "lineWidth": 1, "fillOpacity": 10 } } },
-      "targets": [{ "expr": "rate(jvm_gc_pause_seconds_count{job=\"hrguard-api\"}[$__rate_interval])", "legendFormat": "GC 횟수/s ({{action}})", "refId": "A" }]
+      "targets": [{ "expr": "rate(jvm_gc_pause_seconds_count{job=\"hrguard-api\"}[1m])", "legendFormat": "GC 횟수/s ({{action}})", "refId": "A" }]
+    },
+
+    {
+      "id": 73, "type": "timeseries",
+      "title": "Old Gen 승격률",
+      "description": "Young Gen에서 Old Gen으로 이동한 바이트/s. 급증 시 Minor GC가 감당 못하는 신호 → Major GC 유발 전조.",
+      "gridPos": { "x": 0, "y": 54, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "lineWidth": 2, "fillOpacity": 15 } } },
+      "targets": [{ "expr": "rate(jvm_gc_memory_promoted_bytes_total{job=\"hrguard-api\"}[1m])", "legendFormat": "승격률 (B/s)", "refId": "A" }]
+    },
+
+    {
+      "id": 74, "type": "timeseries",
+      "title": "메모리 할당률",
+      "description": "초당 새 객체 생성량(Eden 소비 속도). 높을수록 Minor GC 빈도 상승.",
+      "gridPos": { "x": 12, "y": 54, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "lineWidth": 2, "fillOpacity": 15 } } },
+      "targets": [{ "expr": "rate(jvm_gc_memory_allocated_bytes_total{job=\"hrguard-api\"}[1m])", "legendFormat": "할당률 (B/s)", "refId": "A" }]
     },
 
     {
       "id": 80, "type": "row",
       "title": "HikariCP 커넥션 풀",
-      "gridPos": { "x": 0, "y": 54, "w": 24, "h": 1 },
+      "gridPos": { "x": 0, "y": 60, "w": 24, "h": 1 },
       "collapsed": false
     },
 
@@ -283,126 +310,48 @@
       "id": 81, "type": "timeseries",
       "title": "커넥션 풀 상태 (Active / Idle / Max / Pending)",
       "description": "Pending 상승 = 풀 포화. Max에 Active가 달라붙으면 pool size 증설 필요.",
-      "gridPos": { "x": 0, "y": 55, "w": 12, "h": 7 },
+      "gridPos": { "x": 0, "y": 61, "w": 12, "h": 7 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {
         "defaults": { "unit": "short", "custom": { "lineWidth": 2 } },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "Pending" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Pending" }, "properties": [{ "id": "color", "value": { "fixedColor": "#E0B400", "mode": "fixed" } }] },
           { "matcher": { "id": "byName", "options": "Max" }, "properties": [{ "id": "custom.lineStyle", "value": { "dash": [8, 8], "fill": "dash" } }] }
         ]
       },
       "targets": [
-        { "expr": "hikaricp_connections_active{job=\"hrguard-api\"}", "legendFormat": "Active ({{pool}})", "refId": "A" },
-        { "expr": "hikaricp_connections_idle{job=\"hrguard-api\"}", "legendFormat": "Idle ({{pool}})", "refId": "B" },
-        { "expr": "hikaricp_connections_max{job=\"hrguard-api\"}", "legendFormat": "Max ({{pool}})", "refId": "C" },
-        { "expr": "hikaricp_connections_pending{job=\"hrguard-api\"}", "legendFormat": "Pending ({{pool}})", "refId": "D" }
+        { "expr": "hikaricp_connections_active{job=\"hrguard-api\", pool=\"hrguard-domain\"}", "legendFormat": "Active", "refId": "A" },
+        { "expr": "hikaricp_connections_idle{job=\"hrguard-api\", pool=\"hrguard-domain\"}", "legendFormat": "Idle", "refId": "B" },
+        { "expr": "hikaricp_connections_max{job=\"hrguard-api\", pool=\"hrguard-domain\"}", "legendFormat": "Max", "refId": "C" },
+        { "expr": "hikaricp_connections_pending{job=\"hrguard-api\", pool=\"hrguard-domain\"}", "legendFormat": "Pending", "refId": "D" }
       ]
     },
 
     {
       "id": 82, "type": "timeseries",
       "title": "커넥션 획득 대기 시간 (p50 / p95)",
-      "description": "API 서버에서 p95 > 50ms 이면 DB 부하 확인 필요.",
-      "gridPos": { "x": 12, "y": 55, "w": 8, "h": 7 },
+      "description": "p95 > 50ms 이면 DB 부하 확인 필요.",
+      "gridPos": { "x": 12, "y": 61, "w": 8, "h": 7 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {
         "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
-        "overrides": [{ "matcher": { "id": "byName", "options": "p95" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }]
+        "overrides": [{ "matcher": { "id": "byName", "options": "p95" }, "properties": [{ "id": "color", "value": { "fixedColor": "#E02F44", "mode": "fixed" } }] }]
       },
       "targets": [
-        { "expr": "histogram_quantile(0.95, rate(hikaricp_connections_acquire_seconds_bucket{job=\"hrguard-api\"}[$__rate_interval]))", "legendFormat": "p95", "refId": "A" },
-        { "expr": "histogram_quantile(0.50, rate(hikaricp_connections_acquire_seconds_bucket{job=\"hrguard-api\"}[$__rate_interval]))", "legendFormat": "p50", "refId": "B" }
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(hikaricp_connections_acquire_seconds_bucket{job=\"hrguard-api\", pool=\"hrguard-domain\"}[$__rate_interval])))", "legendFormat": "p95", "refId": "A" },
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(hikaricp_connections_acquire_seconds_bucket{job=\"hrguard-api\", pool=\"hrguard-domain\"}[$__rate_interval])))", "legendFormat": "p50", "refId": "B" }
       ]
     },
 
     {
       "id": 83, "type": "stat",
       "title": "커넥션 타임아웃 누적",
-      "gridPos": { "x": 20, "y": 55, "w": 4, "h": 7 },
+      "description": "커넥션 획득 실패 횟수. 1 이상이면 즉시 풀 설정 점검.",
+      "gridPos": { "x": 20, "y": 61, "w": 4, "h": 7 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
-      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } },
-      "targets": [{ "expr": "hikaricp_connections_timeout_total{job=\"hrguard-api\"} or vector(0)", "legendFormat": "타임아웃", "refId": "A" }]
-    },
-
-    {
-      "id": 90, "type": "row",
-      "title": "▶  로그",
-      "gridPos": { "x": 0, "y": 62, "w": 24, "h": 1 },
-      "collapsed": false
-    },
-
-    {
-      "id": 91, "type": "logs",
-      "title": "운영 로그 — INFO (비즈니스 성공 이벤트)",
-      "description": "비즈니스 프로세스 정상 완료 이벤트. /actuator 제외.",
-      "gridPos": { "x": 0, "y": 63, "w": 24, "h": 10 },
-      "datasource": { "type": "loki", "uid": "loki" },
-      "options": {
-        "dedupStrategy": "none",
-        "enableLogDetails": true,
-        "prettifyLogMessage": false,
-        "showCommonLabels": false,
-        "showLabels": true,
-        "showTime": true,
-        "sortOrder": "Descending",
-        "wrapLogMessage": true
-      },
-      "targets": [{
-        "datasource": { "type": "loki", "uid": "loki" },
-        "expr": "{job=\"hrguard-app\", log_type=\"business\"} !~ \"/actuator\"",
-        "legendFormat": "",
-        "refId": "A"
-      }]
-    },
-
-    {
-      "id": 94, "type": "logs",
-      "title": "경고 로그 — WARN (비정상 상황, 추후 분석)",
-      "description": "처리 지연, 권한 없는 접근 시도 등 시스템은 동작하지만 비정상 상황.",
-      "gridPos": { "x": 0, "y": 73, "w": 24, "h": 8 },
-      "datasource": { "type": "loki", "uid": "loki" },
-      "options": {
-        "dedupStrategy": "none",
-        "enableLogDetails": true,
-        "prettifyLogMessage": false,
-        "showCommonLabels": false,
-        "showLabels": true,
-        "showTime": true,
-        "sortOrder": "Descending",
-        "wrapLogMessage": true
-      },
-      "targets": [{
-        "datasource": { "type": "loki", "uid": "loki" },
-        "expr": "{job=\"hrguard-app\", log_type=\"warn\"}",
-        "legendFormat": "",
-        "refId": "A"
-      }]
-    },
-
-    {
-      "id": 92, "type": "logs",
-      "title": "에러 로그 — ERROR (즉시 알람 대상)",
-      "description": "시스템 정상 동작 불가 상태. DB 연결 실패, 외부 API 타임아웃 등. 즉시 조치 필요.",
-      "gridPos": { "x": 0, "y": 81, "w": 24, "h": 8 },
-      "datasource": { "type": "loki", "uid": "loki" },
-      "options": {
-        "dedupStrategy": "none",
-        "enableLogDetails": true,
-        "prettifyLogMessage": false,
-        "showCommonLabels": false,
-        "showLabels": true,
-        "showTime": true,
-        "sortOrder": "Descending",
-        "wrapLogMessage": true
-      },
-      "targets": [{
-        "datasource": { "type": "loki", "uid": "loki" },
-        "expr": "{job=\"hrguard-app\", log_type=\"error\"}",
-        "legendFormat": "",
-        "refId": "A"
-      }]
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "#3274D9", "value": null }, { "color": "#E02F44", "value": 1 }] } } },
+      "targets": [{ "expr": "hikaricp_connections_timeout_total{job=\"hrguard-api\", pool=\"hrguard-domain\"}", "legendFormat": "타임아웃", "refId": "A" }]
     }
 
   ]
