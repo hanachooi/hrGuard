@@ -3,6 +3,7 @@ package dev.batch.payroll.listener;
 import dev.batch.common.exception.BatchErrorClassifier;
 import dev.batch.common.exception.BatchErrorClassifier.Classification;
 import dev.batch.common.exception.BatchException;
+import dev.batch.common.slack.SlackNotifier;
 import dev.payroll.service.InsuranceCalculator;
 import dev.payroll.service.TaxCalculator;
 import io.micrometer.core.instrument.Counter;
@@ -47,10 +48,12 @@ public class PayrollJobExecutionListener implements JobExecutionListener, ExitCo
     private final Timer jobFailureTimer;
     private final InsuranceCalculator insuranceCalculator;
     private final TaxCalculator taxCalculator;
+    private final SlackNotifier slackNotifier;
 
     public PayrollJobExecutionListener(MeterRegistry meterRegistry,
                                        InsuranceCalculator insuranceCalculator,
-                                       TaxCalculator taxCalculator) {
+                                       TaxCalculator taxCalculator,
+                                       SlackNotifier slackNotifier) {
         this.jobSuccessCounter = Counter.builder("payroll.batch.job")
                 .tag("status", "success")
                 .description("Payroll batch job 성공 횟수")
@@ -69,6 +72,7 @@ public class PayrollJobExecutionListener implements JobExecutionListener, ExitCo
                 .register(meterRegistry);
         this.insuranceCalculator = insuranceCalculator;
         this.taxCalculator = taxCalculator;
+        this.slackNotifier = slackNotifier;
     }
 
     // ── Job 시작 ────────────────────────────────────────────────────────────
@@ -137,6 +141,10 @@ public class PayrollJobExecutionListener implements JobExecutionListener, ExitCo
 
         log.error("===== [급여 정산 비정상종료] status={}, yearMonth={}, 소요시간={}ms, exitCode=1 =====",
                 jobExecution.getStatus(), yearMonth, elapsed.toMillis());
+
+        String causeMessage = jobExecution.getAllFailureExceptions().isEmpty() ? null
+                : BatchErrorClassifier.classify(jobExecution.getAllFailureExceptions().get(0)).cause().getMessage();
+        slackNotifier.sendBatchStop(yearMonth, jobExecution.getStatus().name(), elapsed.toMillis(), causeMessage);
       } finally {
           MDC.clear();
       }

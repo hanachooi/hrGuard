@@ -1,0 +1,177 @@
+{
+  "title": "hrGuard - Payroll Batch 로그",
+  "uid": "hrguard-payroll-batch-logs",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "tags": ["batch", "payroll", "hrguard", "logs"],
+  "panels": [
+
+    {
+      "id": 1, "type": "row",
+      "title": "▶  치명 — 즉시 알람",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 10, "type": "logs",
+      "title": "[STOP] — 배치 중단 / retry 소진 / skip 한도 초과",
+      "description": "log_tag=STOP — SkipPolicy false 반환 → step FAILED. 1건이라도 발생 시 운영자 개입 필요.",
+      "gridPos": { "x": 0, "y": 1, "w": 24, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Ascending",
+        "wrapLogMessage": true
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{job=\"hrguard-app\", log_tag=\"STOP\"} | json | line_format \"[STOP]{{ if .error_code }}[{{ .error_code }}]{{ end }} {{ .message }}{{ if .member_id }} (member_id={{ .member_id }}{{ if .year }}, {{ .year }}-{{ .month }}{{ end }}){{ end }}\"",
+        "legendFormat": "",
+        "refId": "A"
+      }]
+    },
+
+    {
+      "id": 2, "type": "row",
+      "title": "▶  운영 신호 — 데이터 결함 / 재시도",
+      "gridPos": { "x": 0, "y": 11, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 20, "type": "logs",
+      "title": "[SKIP] — 데이터 결함 (DLT 적재됨)",
+      "description": "log_tag=SKIP. phase 별로 READ/PROCESS/WRITE 구분. DLT (payroll_error_log) 에 원본 데이터 보존.",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Ascending",
+        "wrapLogMessage": true
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{job=\"hrguard-app\", log_tag=\"SKIP\"} | json | line_format \"[SKIP]{{ if .phase }}[{{ .phase }}]{{ end }} {{ .message }}{{ if .member_id }} (member_id={{ .member_id }}{{ if .year }}, {{ .year }}-{{ .month }}{{ end }}){{ end }}{{ if .error_code }} [{{ .error_code }}]{{ end }}\"",
+        "legendFormat": "",
+        "refId": "A"
+      }]
+    },
+
+    {
+      "id": 21, "type": "logs",
+      "title": "[RETRY] — 재시도 attempt",
+      "description": "log_tag=RETRY. chunk-level retry 의 매 attempt. 같은 chunk 에서 N번 반복되면 attempt 라벨로 추적.",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Ascending",
+        "wrapLogMessage": true
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{job=\"hrguard-app\", log_tag=\"RETRY\"} | json | line_format \"[RETRY]{{ if .attempt }} attempt={{ .attempt }}{{ end }} {{ .message }}\"",
+        "legendFormat": "",
+        "refId": "A"
+      }]
+    },
+
+    {
+      "id": 3, "type": "row",
+      "title": "▶  레벨별 전체 스트림",
+      "gridPos": { "x": 0, "y": 22, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 30, "type": "logs",
+      "title": "ERROR — 전체 (framework 포함)",
+      "description": "error.log 전체. [STOP] 외에 Spring/JVM/HikariCP 등 framework 에러까지 포함. log_tag=\"STOP\" 만 보려면 위 [STOP] 패널 참고.",
+      "gridPos": { "x": 0, "y": 23, "w": 24, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Ascending",
+        "wrapLogMessage": true
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{job=\"hrguard-app\", log_type=\"error\"} | json | line_format \"{{ if .log_tag }}[{{ .log_tag }}]{{ end }}{{ if .error_code }}[{{ .error_code }}]{{ end }} {{ .message }}\"",
+        "legendFormat": "",
+        "refId": "A"
+      }]
+    },
+
+    {
+      "id": 31, "type": "logs",
+      "title": "WARN — 전체",
+      "description": "warn.log 전체. [SKIP] / [RETRY] / [Chunk 롤백] + framework warn.",
+      "gridPos": { "x": 0, "y": 33, "w": 24, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Ascending",
+        "wrapLogMessage": true
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{job=\"hrguard-app\", log_type=\"warn\"} | json | line_format \"{{ if .log_tag }}[{{ .log_tag }}]{{ end }}{{ if .phase }}[{{ .phase }}]{{ end }} {{ .message }}{{ if .member_id }} (member_id={{ .member_id }}{{ if .year }}, {{ .year }}-{{ .month }}{{ end }}){{ end }}{{ if .attempt }} (attempt={{ .attempt }}){{ end }}{{ if .error_code }} [{{ .error_code }}]{{ end }}\"",
+        "legendFormat": "",
+        "refId": "A"
+      }]
+    },
+
+    {
+      "id": 32, "type": "logs",
+      "title": "INFO — 비즈니스 흐름",
+      "description": "Job/Step 시작-완료, Reader 종료 등 핵심 운영 이벤트. chunk-level 반복 로그는 DEBUG 로 강등되어 안 보임.",
+      "gridPos": { "x": 0, "y": 43, "w": 24, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Ascending",
+        "wrapLogMessage": true
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{job=\"hrguard-app\", log_type=\"business\"} | json | line_format \"{{ if .jobName }}[{{ .jobName }}]{{ if .jobParam }}[{{ .jobParam }}]{{ end }} {{ end }}{{ .message }}\"",
+        "legendFormat": "",
+        "refId": "A"
+      }]
+    }
+
+  ]
+}

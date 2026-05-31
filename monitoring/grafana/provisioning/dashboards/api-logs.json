@@ -1,0 +1,98 @@
+{
+  "title": "hrGuard - API 로그",
+  "uid": "hrguard-api-logs",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "tags": ["api", "hrguard", "logs"],
+  "panels": [
+
+    {
+      "id": 1, "type": "row",
+      "title": "▶  ERROR — 즉시 알람",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 10, "type": "logs",
+      "title": "ERROR — 전체",
+      "description": "api 의 error.log 전체. 5xx, 인증 실패, 외부 API 타임아웃, 미처리 예외 등.",
+      "gridPos": { "x": 0, "y": 1, "w": 24, "h": 12 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Ascending",
+        "wrapLogMessage": true
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{job=\"hrguard-app\", log_type=\"error\"} | json | line_format \"{{ if .log_tag }}[{{ .log_tag }}]{{ end }} {{ .message }}\"",
+        "legendFormat": "",
+        "refId": "A"
+      }]
+    },
+
+    {
+      "id": 2, "type": "row",
+      "title": "▶  WARN / INFO",
+      "gridPos": { "x": 0, "y": 13, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+
+    {
+      "id": 20, "type": "logs",
+      "title": "WARN — 전체",
+      "description": "warn.log. 4xx 요청, 비정상 상태 등.",
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Ascending",
+        "wrapLogMessage": true
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{job=\"hrguard-app\", log_type=\"warn\"} | json | line_format \"{{ if .log_tag }}[{{ .log_tag }}]{{ end }} {{ .message }}\"",
+        "legendFormat": "",
+        "refId": "A"
+      }]
+    },
+
+    {
+      "id": 21, "type": "logs",
+      "title": "INFO — 운영 이벤트",
+      "description": "app.log. 요청 처리 흐름, 비즈니스 성공 이벤트 등.",
+      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Ascending",
+        "wrapLogMessage": true
+      },
+      "targets": [{
+        "datasource": { "type": "loki", "uid": "loki" },
+        "expr": "{job=\"hrguard-app\", log_type=\"business\"} | json | line_format \"{{ .message }}\"",
+        "legendFormat": "",
+        "refId": "A"
+      }]
+    }
+
+  ]
+}

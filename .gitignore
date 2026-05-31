@@ -51,3 +51,9 @@ out/
 deploy/prod/.env.*
 !deploy/prod/.env.*.example
 monitoring/.env
+
+### Logs & temp ###
+logs/
+**/logs/
+spy.log
+.batch-backup/

@@ -50,6 +50,9 @@ batch:
         multiplier: 2.0
         max-ms: 30000
 
+slack:
+  webhook-url: ${SLACK_WEBHOOK_URL:}
+
 holiday:
   api:
     service-key: ${HOLIDAY_API_KEY:}
