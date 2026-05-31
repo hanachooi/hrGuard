@@ -56,7 +56,14 @@ public final class BatchErrorClassifier {
             return new Classification(ec.getType(), ec.getCode(), ec.getMessage(), t);
         }
 
-        // 2. RETRY — 일시적 데이터 접근 오류 (deadlock / lock timeout / query timeout)
+        // 2. RETRY 소진 — ExhaustedRetryException 은 원인 체인보다 먼저 잡아야
+        //    cause 를 따라가면 TransientDataAccessException 으로 RETRY 분류되어
+        //    "재시도합니다" 메시지가 STOP 로그에 찍히는 문제를 방지한다.
+        if (isClass(t, "org.springframework.retry.ExhaustedRetryException")) {
+            return of(BatchSystemErrorCode.RETRY_EXHAUSTED, t);
+        }
+
+        // 3. RETRY — 일시적 데이터 접근 오류 (deadlock / lock timeout / query timeout)
         if (t instanceof TransientDataAccessException) {
             return of(BatchSystemErrorCode.DATABASE_TRANSIENT_ERROR, t);
         }

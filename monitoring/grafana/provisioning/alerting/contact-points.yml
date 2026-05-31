@@ -1,0 +1,17 @@
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: slack-hrguard-errors
+    receivers:
+      - uid: slack-hrguard-errors
+        type: slack
+        settings:
+          url: ${SLACK_WEBHOOK_URL}
+          title: '[hrGuard] {{ .CommonLabels.alertname }}'
+          text: |
+            {{ range .Alerts -}}
+            *{{ .Status | toUpper }}* {{ .Labels.alertname }}
+            {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
+            {{ end }}
+        disableResolveMessage: false

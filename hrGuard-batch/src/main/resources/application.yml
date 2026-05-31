@@ -7,14 +7,16 @@ spring:
   datasource:
     meta:
       hikari:
+        pool-name: hrguard-meta
         driver-class-name: com.mysql.cj.jdbc.Driver
         jdbc-url: jdbc:mysql://${DB_HOST:localhost}:3306/meta?useSSL=false&useUnicode=true&serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true
         username: ${DB_USERNAME:root}
         password: ${DB_PASSWORD:1234}
     domain:
       hikari:
-        driver-class-name: com.p6spy.engine.spy.P6SpyDriver
-        jdbc-url: jdbc:p6spy:mysql://${DB_HOST:localhost}:3306/${DOMAIN_DB:autohrm}?useSSL=false&useUnicode=true&serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true&useCursorFetch=true
+        pool-name: hrguard-domain
+        driver-class-name: com.mysql.cj.jdbc.Driver
+        jdbc-url: jdbc:mysql://${DB_HOST:localhost}:3306/${DOMAIN_DB:autohrm}?useSSL=false&useUnicode=true&serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true&useCursorFetch=true
         username: ${DB_USERNAME:root}
         password: ${DB_PASSWORD:1234}
         auto-commit: false
@@ -48,6 +50,9 @@ batch:
         multiplier: 2.0
         max-ms: 30000
 
+slack:
+  webhook-url: ${SLACK_WEBHOOK_URL:}
+
 holiday:
   api:
     service-key: ${HOLIDAY_API_KEY:}
@@ -57,11 +62,13 @@ logging:
     root: INFO
     dev:
       batch: INFO
+      # 메모리 톱니 패턴 추적용 별도 logger — 평소 OFF, 메모리 조사 시만 INFO 로 켬
+      batch.heap: WARN
     org:
       hibernate:
         type:
           descriptor.sql: trace
-    p6spy: DEBUG
+        engine.jdbc.spi.SqlExceptionHelper: WARN
     com:
       amazonaws:
         util:
@@ -78,3 +85,6 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        hikaricp.connections.acquire: true

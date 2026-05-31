@@ -1,0 +1,22 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'hrguard-api'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: [ '${API_SERVER_IP}:8080' ]
+
+  - job_name: 'hrguard-batch'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: [ '${BATCH_SERVER_IP}:8080' ]
+
+  - job_name: 'node-exporter-api'
+    static_configs:
+      - targets: [ '${API_SERVER_IP}:9100' ]
+
+  - job_name: 'node-exporter-batch'
+    static_configs:
+      - targets: [ '${BATCH_SERVER_IP}:9100' ]

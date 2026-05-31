@@ -4,6 +4,7 @@ import dev.batch.common.exception.BatchErrorClassifier.Classification;
 import dev.common.configuration.DataSourceConfig;
 import dev.common.configuration.TransactionManagerConfig;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -47,8 +48,12 @@ public class PayrollErrorLogWriter {
                 memberId, year, month, phase,
                 c.type().name(), c.code(), c.message(), originalDataJson);
         } catch (Exception e) {
-            log.error("[SKIP] payroll_error_log 저장 실패 — memberId={} phase={} cause={}",
-                    memberId, phase, e.getMessage());
+            try (var ignored1 = MDC.putCloseable("log_tag", "SKIP");
+                 var ignored2 = MDC.putCloseable("phase", phase == null ? "" : phase);
+                 var ignored3 = MDC.putCloseable("member_id",
+                         memberId == null ? "" : String.valueOf(memberId))) {
+                log.error("payroll_error_log 저장 실패 — cause={}", e.getMessage());
+            }
         }
     }
 }

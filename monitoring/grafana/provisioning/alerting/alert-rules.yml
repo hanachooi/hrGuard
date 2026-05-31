@@ -1,0 +1,224 @@
+apiVersion: 1
+
+groups:
+
+  # ── 메트릭 기반: 이상 징후 먼저 인지 (Prometheus) ─────────────────────────
+  - orgId: 1
+    name: hrguard-metric-alerts
+    folder: hrGuard
+    interval: 1m
+    rules:
+
+      # API 는 상시 기동 서비스 → up=0 이면 다운타임
+      # Batch 는 Job 실행 시에만 뜨는 프로세스 → up 알람 제외
+      - uid: api-down-alert
+        title: "[API] 서비스 다운"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: 'up{job="hrguard-api"}'
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator:
+                    params: [1]
+                    type: lt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          description: "API 서비스 응답 없음 — 다운타임 감지"
+        noDataState: Alerting
+        execErrState: Alerting
+        isPaused: false
+
+      - uid: api-5xx-alert
+        title: "[API] 5xx 에러율 급증"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: 'sum(rate(http_server_requests_seconds_count{job="hrguard-api", outcome="SERVER_ERROR"}[5m]))'
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator:
+                    params: [0.1]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+        for: 0s
+        labels:
+          severity: warning
+        annotations:
+          description: "5xx 에러율 0.1 rps 초과 — 응답 실패 증가"
+        noDataState: NoData
+        execErrState: OK
+        isPaused: false
+
+      - uid: api-latency-alert
+        title: "[API] 응답시간 p95 지연"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: 'histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{job="hrguard-api"}[5m])))'
+              instant: true
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator:
+                    params: [2]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          description: "API p95 응답시간 2초 초과 — 응답 지연 감지"
+        noDataState: NoData
+        execErrState: OK
+        isPaused: false
+
+  # ── 로그 기반: 근본 원인 파악 (Loki) ──────────────────────────────────────
+  - orgId: 1
+    name: hrguard-log-alerts
+    folder: hrGuard
+    interval: 1m
+    rules:
+
+      - uid: batch-stop-alert
+        title: "[Batch] STOP 이벤트 — 배치 중단"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: 'count_over_time({job="hrguard-app", log_tag="STOP"} [1h])'
+              queryType: instant
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          description: "STOP 이벤트 발생 — retry 소진 또는 skip 한도 초과로 배치 Job 중단됨"
+        noDataState: NoData
+        execErrState: OK
+        isPaused: false
+
+      - uid: hrguard-error-surge-alert
+        title: "[hrGuard] ERROR 로그 급증 — 근본 원인 확인 필요"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: loki
+            model:
+              expr: 'count_over_time({job="hrguard-app", log_type="error"} [1h])'
+              queryType: instant
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator:
+                    params: [5]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+                  reducer:
+                    type: last
+        for: 0s
+        labels:
+          severity: warning
+        annotations:
+          description: "30분 내 ERROR 로그 5건 초과 — Loki 대시보드에서 근본 원인 확인"
+        noDataState: NoData
+        execErrState: OK
+        isPaused: false

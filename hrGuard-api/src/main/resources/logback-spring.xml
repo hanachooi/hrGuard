@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!--
+    ┌──────────────────────────────────────────────────────────────────┐
+    │  로그 레벨 전략 (api)                                              │
+    │                                                                  │
+    │  ERROR  시스템 정상 동작 불가 (DB 연결 실패, 외부 API 타임아웃)      │
+    │         → error.log 단독 기록 | Promtail 수집 → 즉시 알람          │
+    │  WARN   비정상이지만 시스템은 동작 (처리 지연, 권한 없는 접근 시도)  │
+    │         → warn.log  단독 기록 | Promtail 수집 → 추후 분석          │
+    │  INFO   기본 운영 레벨. 비즈니스 프로세스 성공 이벤트만 기록          │
+    │         → app.log   단독 기록 | Promtail 수집 → 운영 현황 대시보드 │
+    │                                                                  │
+    │  CONSOLE  사람이 읽기 좋은 텍스트 패턴                              │
+    │  FILE     JSON 한 줄/이벤트 — Promtail json stage 로 라벨 추출      │
+    └──────────────────────────────────────────────────────────────────┘
+    -->
+
+    <property name="OPS_LOG" value="C:/hrGuard/logs"/>
+    <property name="CONSOLE_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %X{log_tag:-} %logger{36} - %msg%n"/>
+
+    <!-- ── CONSOLE ────────────────────────────────────────────────── -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder><pattern>${CONSOLE_PATTERN}</pattern></encoder>
+    </appender>
+
+    <!-- ── app.log (INFO 전용, Async, JSON) ──────────────────────── -->
+    <appender name="_APP_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${OPS_LOG}/app.log</file>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>INFO</level>
+            <onMatch>ACCEPT</onMatch>
+            <onMismatch>DENY</onMismatch>
+        </filter>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${OPS_LOG}/app-%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>100MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>2GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>log_tag</includeMdcKeyName>
+        </encoder>
+    </appender>
+
+    <appender name="APP_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>512</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>false</includeCallerData>
+        <neverBlock>false</neverBlock>
+        <appender-ref ref="_APP_FILE"/>
+    </appender>
+
+    <!-- ── warn.log (WARN 전용, Async, JSON) ─────────────────────── -->
+    <appender name="_WARN_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${OPS_LOG}/warn.log</file>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>WARN</level>
+            <onMatch>ACCEPT</onMatch>
+            <onMismatch>DENY</onMismatch>
+        </filter>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${OPS_LOG}/warn-%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>500MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>log_tag</includeMdcKeyName>
+        </encoder>
+    </appender>
+
+    <appender name="WARN_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>256</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>false</includeCallerData>
+        <neverBlock>false</neverBlock>
+        <appender-ref ref="_WARN_FILE"/>
+    </appender>
+
+    <!-- ── error.log (ERROR 전용, Async, JSON) ───────────────────── -->
+    <appender name="_ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${OPS_LOG}/error.log</file>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>ERROR</level>
+            <onMatch>ACCEPT</onMatch>
+            <onMismatch>DENY</onMismatch>
+        </filter>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${OPS_LOG}/error-%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>500MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>log_tag</includeMdcKeyName>
+        </encoder>
+    </appender>
+
+    <appender name="ERROR_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>256</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>true</includeCallerData>
+        <neverBlock>false</neverBlock>
+        <appender-ref ref="_ERROR_FILE"/>
+    </appender>
+
+    <!-- ── Logger ─────────────────────────────────────────────────── -->
+    <logger name="org.hibernate.SQL"                   level="OFF"/>
+    <logger name="org.hibernate.orm.jdbc.bind"         level="OFF"/>
+    <logger name="com.amazonaws.util.EC2MetadataUtils" level="ERROR"/>
+
+    <!-- Root: CONSOLE + APP_FILE(INFO) + WARN_FILE(WARN) + ERROR_FILE(ERROR) -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="APP_FILE"/>
+        <appender-ref ref="WARN_FILE"/>
+        <appender-ref ref="ERROR_FILE"/>
+    </root>
+
+
+</configuration>

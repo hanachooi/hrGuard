@@ -2,8 +2,6 @@ package dev.batch.payroll.step;
 
 import dev.batch.common.exception.BatchErrorClassifier;
 import dev.batch.common.exception.BatchErrorClassifier.Classification;
-import dev.batch.common.exception.BatchSystemErrorCode;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.step.skip.SkipLimitExceededException;
 import org.springframework.batch.core.step.skip.SkipPolicy;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,7 +24,6 @@ import org.springframework.stereotype.Component;
  *       Scan 모드를 건너뛰므로 RetryContextCache key 변형 → TerminatedRetryException 함정을 회피한다.</li>
  * </ul>
  */
-@Slf4j
 @Component
 public class PayrollBatchSkipPolicy implements SkipPolicy {
 
@@ -46,15 +43,14 @@ public class PayrollBatchSkipPolicy implements SkipPolicy {
 
         return switch (c.type()) {
             case STOP -> {
-                log.error("[STOP] [{}] {} → 배치 중단 | cause={}: {}",
-                        c.code(), c.message(),
-                        c.cause().getClass().getSimpleName(), c.cause().getMessage(), t);
+                // 최종 STOP 로깅은 PayrollJobExecutionListener.afterJob() 단일 진입점.
+                // shouldSkip() 은 결정(false 반환)만 담당.
                 yield false;
             }
             case SKIP -> {
                 checkSkipLimit(skipCount, t);
-                log.warn("[SKIP] [{}] {} (skip #{}) | cause={}",
-                        c.code(), c.message(), Math.max(skipCount, 0) + 1, c.cause().getMessage());
+                // [SKIP] 로깅 단일 진입점은 PayrollSkipListener — phase/member_id 포함 상세 로그.
+                // 여기서 추가 로그를 남기면 phase 없는 중복 로그가 Loki 에 쌓임.
                 yield true;
             }
             case RETRY -> {
@@ -62,9 +58,7 @@ public class PayrollBatchSkipPolicy implements SkipPolicy {
                 // false 반환 → FaultTolerantChunkProcessor.recoveryCallback 의
                 // (!shouldSkip) 분기에서 ExhaustedRetryException 으로 종료.
                 // Scan 모드 진입 안 함 → cache key 깨짐 회피.
-                log.error("[STOP] [{}] retry {}회 소진 → 배치 중단 | cause={}: {}",
-                        c.code(), retryLimit,
-                        c.cause().getClass().getSimpleName(), c.cause().getMessage());
+                // 최종 STOP 로깅은 PayrollJobExecutionListener.afterJob() 단일 진입점.
                 yield false;
             }
         };
@@ -73,9 +67,6 @@ public class PayrollBatchSkipPolicy implements SkipPolicy {
     /** skip 한도 초과는 STOP 의 한 종류로 분류된다. */
     private void checkSkipLimit(long skipCount, Throwable t) {
         if (skipCount >= skipLimit) {
-            log.error("[STOP] [{}] 한도 {}건 초과 → Job 강제 종료 | cause={}: {}",
-                    BatchSystemErrorCode.SKIP_LIMIT_EXCEEDED.getCode(),
-                    skipLimit, t.getClass().getSimpleName(), t.getMessage());
             throw new SkipLimitExceededException(skipLimit, t);
         }
     }
